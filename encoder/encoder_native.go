@@ -118,4 +118,10 @@ var (
     //
     // NewStreamEncoder returns a new encoder that write to w.
     NewStreamEncoder = encoder.NewStreamEncoder
+
+    ForceUseJit = encoder.ForceUseJit
+
+    ForceUseVM = encoder.ForceUseVM
+
+    GetUseVM = encoder.GetUseVM
 )

@@ -28,4 +28,7 @@ const (
     BitEncodeNullForInfOrNan 
 	
     BitPointerValue = 63
+    /* OneShiftBitPointerValue = (uint64)1 << alg.BitPointerValue =
+     0x8000000000000000 = int64(-9223372036854775808) */
+    OneShiftBitPointerValue = int64(-9223372036854775808)
 )

@@ -195,7 +195,9 @@ func (d *f32Decoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) error {
 	}
 
 	ret, ok := node.AsF64(ctx)
-	if !ok || ret > math.MaxFloat32 || ret < -math.MaxFloat32 {
+    // avoid overflow after marshaling maximum and minimum of float64
+	t_ret := float32(ret)
+	if !ok || t_ret > math.MaxFloat32 || t_ret < -math.MaxFloat32 {
 		return error_mismatch(node, ctx, float32Type)
 	}
 
