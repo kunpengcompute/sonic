@@ -219,6 +219,7 @@ const (
 	_FM_exp64 = 0x7ff0000000000000
 )
 
+// Strings in hex format
 const (
 	// null
 	_IM_null = 0x6c6c756e
@@ -453,7 +454,7 @@ func (self *Assembler) store_int(nd int, fn obj.Addr, ins string) {
 
 func (self *Assembler) write_imm_to_mem(op string, imm obj.Addr, base0 obj.Addr, base1 obj.Addr, base2_imm int64, script_reg_v obj.Addr, script_reg_a obj.Addr) {
 	self.Emit("MOVD", imm, script_reg_v)
-	self.EmitStrriRaw(jit.Ptr, op, script_reg_v, base0, base1, base2_imm, script_reg_a)
+	self.EmitStrriWithInsn(jit.Ptr, op, script_reg_v, base0, base1, base2_imm, script_reg_a)
 }
 
 func (self *Assembler) store_str(s string) {
@@ -1045,10 +1046,10 @@ func (self *Assembler) _asm_OP_bin(_ *ir.Instr) {
 		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _R0) // MOVQ 8(SP.p), AX
 		self.Emit("ADD", jit.Imm(2), _R0)         // ADDQ $2, AX
 		self.Emit("MOVD", jit.Imm(_IM_mulv), _T0) // MOVQ $_MF_mulv, CX
-		self.EmitOp3("UMULH", _T2, _T0, _R0)
-		self.EmitOp3("ADD", _R0, _T2, _T2)
-		self.EmitOp3("ADD", _R0, _R0, jit.Imm(1))
-		self.EmitOp3("ORR", _R0, _R0, jit.Imm(2))
+		self.EmitWithThreeOps("UMULH", _T2, _T0, _R0)
+		self.EmitWithThreeOps("ADD", _R0, _T2, _T2)
+		self.EmitWithThreeOps("ADD", _R0, _R0, jit.Imm(1))
+		self.EmitWithThreeOps("ORR", _R0, _R0, jit.Imm(2))
 		self.check_size_r_auto(_R0)
 		self.add_char('"')                      // CHAR $'"'
 		self.Emit("MOVD", _ARG_rb, _R0)         // MOVQ rb<>+0(FP), DI
@@ -1177,8 +1178,8 @@ func (self *Assembler) _asm_OP_drop(_ *ir.Instr) {
 func (self *Assembler) _asm_OP_drop_2(_ *ir.Instr) {
 	self._debug_tag(0x1c) // 0x01c
 	self.drop_state(vars.StateSize * 2)
-	self.EmitStrriRaw(jit.Ptr, "MOVD", _ZR, _ST, _T2, 56, _T0)
-	self.EmitStrriRaw(jit.Ptr, "MOVD", _ZR, _ST, _T2, 64, _T0)
+	self.EmitStrriWithInsn(jit.Ptr, "MOVD", _ZR, _ST, _T2, 56, _T0)
+	self.EmitStrriWithInsn(jit.Ptr, "MOVD", _ZR, _ST, _T2, 64, _T0)
 }
 
 func (self *Assembler) _asm_OP_recurse(p *ir.Instr) {
@@ -1200,7 +1201,7 @@ func (self *Assembler) _asm_OP_recurse(p *ir.Instr) {
 	self.Emit("MOVD", _ST, _R3)     // MOVQ  ST, DI
 	self.Emit("MOVD", _ARG_fv, _R4) // MOVQ  $fv, SI
 	if pv {
-		mask := alg.OneShiftBitPointerValue
+		mask := int64(-1 << alg.BitPointerValue) // As mask, uint64(1<<63) = int64(-1<<63)
 		self.EmitTst(jit.Imm(mask), _R4)
 		self.Emit("ORR", jit.Imm(int64(mask)), _R4)
 	}

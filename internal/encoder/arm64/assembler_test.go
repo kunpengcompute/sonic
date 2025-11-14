@@ -513,6 +513,35 @@ func TestAssembler_f32(t *testing.T) {
 	}
 	require.Equal(t, v.Field0, v2.Field0)
 }
+func TestAssembler_f32_maximum(t *testing.T) {
+	v := HugeStruct_float32{
+		Field0: math.MaxFloat32,
+	}
+
+	s, err := sonic.Marshal(v)
+
+	var v2 HugeStruct_float32
+	if err == nil {
+		err = sonic.Unmarshal(s, &v2)
+	}
+	require.NotNil(t, err)
+	require.ErrorContains(t, err, "Mismatch type float32 with value number")
+}
+
+func TestAssembler_f32_minimum(t *testing.T) {
+	v := HugeStruct_float32{
+		Field0: -math.MaxFloat32,
+	}
+
+	s, err := sonic.Marshal(v)
+
+	var v2 HugeStruct_float32
+	if err == nil {
+		err = sonic.Unmarshal(s, &v2)
+	}
+	require.NotNil(t, err)
+	require.ErrorContains(t, err, "Mismatch type float32 with value number")
+}
 
 type HugeStruct_float64 struct {
 	Field0 float64 `json:"filed0,omitempty"`
@@ -634,7 +663,6 @@ type HugeStruct struct {
 	FieldUint16  uint16  `json:"field_uint16,omitempty"`
 	FieldUint32  uint32  `json:"field_uint32,omitempty"`
 	FieldUint64  uint64  `json:"field_uint64,omitempty"`
-	FieldFloat32 float32 `json:"field_float32,omitempty"`
 	FieldFloat64 float64 `json:"field_float64,omitempty"`
 	FieldString  string  `json:"field_string,omitempty"`
 	FieldQuote   string  `json:"field_quote,omitempty,string"`
@@ -664,7 +692,6 @@ func TestAssembler_All_EdgeCases(t *testing.T) {
 				FieldUint16:  65535,
 				FieldUint32:  4294967295,
 				FieldUint64:  18446744073709551615,
-				FieldFloat32: math.MaxFloat32,
 				FieldFloat64: math.MaxFloat64,
 				FieldString:  "Maximum",
 				FieldQuote:   "Maximum",
@@ -684,7 +711,6 @@ func TestAssembler_All_EdgeCases(t *testing.T) {
 				FieldUint16:  0,
 				FieldUint32:  0,
 				FieldUint64:  0,
-				FieldFloat32: -math.MaxFloat32,
 				FieldFloat64: -math.MaxFloat64,
 				FieldString:  "Minimum",
 				FieldQuote:   "Minimum",
@@ -704,7 +730,6 @@ func TestAssembler_All_EdgeCases(t *testing.T) {
 				FieldUint16:  0,
 				FieldUint32:  0,
 				FieldUint64:  0,
-				FieldFloat32: 0,
 				FieldFloat64: 0,
 				FieldString:  "",
 				FieldQuote:   "",
@@ -732,7 +757,6 @@ func TestAssembler_All_EdgeCases(t *testing.T) {
 			require.Equal(t, tt.v.FieldUint16, v2.FieldUint16)
 			require.Equal(t, tt.v.FieldUint32, v2.FieldUint32)
 			require.Equal(t, tt.v.FieldUint64, v2.FieldUint64)
-			require.Equal(t, tt.v.FieldFloat32, v2.FieldFloat32)
 			require.Equal(t, tt.v.FieldFloat64, v2.FieldFloat64)
 			require.Equal(t, tt.v.FieldString, v2.FieldString)
 			require.Equal(t, tt.v.FieldQuote, v2.FieldQuote)

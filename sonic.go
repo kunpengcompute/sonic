@@ -98,14 +98,21 @@ func (cfg Config) Froze() API {
 
 var registry = make(map[reflect.Type]int)
 var IsJitRecover = os.Getenv("SONIC_ENCODER_FALLBACK") != ""
+
+const (
+	UNKNOWN = 0
+	VM_MODE = 1
+	JIT_MODE = 2
+)
+
 // Marshal is implemented by sonic
 func (cfg frozenConfig) Marshal(val interface{}) (result []byte, erro error) {
     t := reflect.TypeOf(val)
-    var pathexp = 0 //0 unknown 1 vm 2 jit
+    var pathexp = UNKNOWN
     var pathjit = false
     if checkType(t) {
         pathexp = registry[t]
-        if pathexp == 1 || encoder.GetUseVM() {
+        if pathexp == VM_MODE || encoder.GetUseVM() {
             encoder.ForceUseVM()
         } else {
             encoder.ForceUseJit()

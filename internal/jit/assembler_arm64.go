@@ -186,14 +186,14 @@ func (self *BaseAssembler) From(op string, val obj.Addr) {
 	self.pb.Append(p)
 }
 
-func (self *BaseAssembler) Emit2source(op string, args ...obj.Addr) {
+func (self *BaseAssembler) EmitWithTwoSrcOps(op string, args ...obj.Addr) {
 	p := self.pb.New()
 	p.As = As(op)
-	self.assignOp2source(p, args)
+	self.assignWithTwoSrcOps(p, args)
 	self.pb.Append(p)
 }
 
-func (self *BaseAssembler) assignOp2source(p *obj.Prog, args []obj.Addr) {
+func (self *BaseAssembler) assignWithTwoSrcOps(p *obj.Prog, args []obj.Addr) {
 	switch len(args) {
 	case 0:
 	case 1:
@@ -223,10 +223,10 @@ func (self *BaseAssembler) EmitNOP() {
 }
 
 func (self *BaseAssembler) EmitAdd(dest obj.Addr, op1 obj.Addr, op2 obj.Addr) {
-	self.EmitOp3("ADD", dest, op1, op2)
+	self.EmitWithThreeOps("ADD", dest, op1, op2)
 }
 
-func (self *BaseAssembler) EmitOp3(op string, dest obj.Addr, op1 obj.Addr, op2 obj.Addr) {
+func (self *BaseAssembler) EmitWithThreeOps(op string, dest obj.Addr, op1 obj.Addr, op2 obj.Addr) {
 	p := self.pb.New()
 	p.As = As(op)
 	p.From = op2
@@ -236,11 +236,11 @@ func (self *BaseAssembler) EmitOp3(op string, dest obj.Addr, op1 obj.Addr, op2 o
 }
 
 func (self *BaseAssembler) EmitCmpq(plan9_op0 obj.Addr, plan9_op1 obj.Addr) {
-	self.Emit2source("CMP", plan9_op0, plan9_op1)
+	self.EmitWithTwoSrcOps("CMP", plan9_op0, plan9_op1)
 }
 
 func (self *BaseAssembler) EmitCmpqLiteral(literal obj.Addr, op1 obj.Addr) {
-	self.Emit2source("CMP", literal, op1)
+	self.EmitWithTwoSrcOps("CMP", literal, op1)
 }
 
 func (self *BaseAssembler) EmitCmpqLiteralLdr(literal obj.Addr, op1 obj.Addr, script_reg obj.Addr) {
@@ -251,11 +251,11 @@ func (self *BaseAssembler) EmitCmpqLiteralLdr(literal obj.Addr, op1 obj.Addr, sc
 type JitPtrTt func(reg obj.Addr, offs int64) obj.Addr
 
 func (self *BaseAssembler) EmitStur(ptr JitPtrTt, v obj.Addr, base obj.Addr, unscaled_offset int64) {
-	self.EmitSturRaw(ptr, "MOVD", v, base, unscaled_offset)
+	self.Emit("MOVD", v, ptr(base, unscaled_offset))
 }
 
 func (self *BaseAssembler) EmitLdur(ptr JitPtrTt, base obj.Addr, unscaled_offset int64, v obj.Addr) {
-	self.EmitLdurRaw(ptr, "MOVD", base, unscaled_offset, v)
+	self.Emit("MOVD", ptr(base, unscaled_offset), v)
 }
 
 func (self *BaseAssembler) EmitCmpqLdr(plan9_op0 obj.Addr, plan9_op1 obj.Addr, script_reg obj.Addr) {
@@ -268,7 +268,7 @@ func (self *BaseAssembler) EmitCmpqLdrPtr(plan9_op0 obj.Addr, plan9_op1 obj.Addr
 }
 
 func (self *BaseAssembler) EmitBrk(args ...obj.Addr) {
-	self.Emit2source("BRK", args...)
+	self.EmitWithTwoSrcOps("BRK", args...)
 }
 
 func (self *BaseAssembler) EmitTbzSLdr(ptr JitPtrTt, op string, imm obj.Addr, from obj.Addr, to string, script_reg obj.Addr) {
@@ -291,17 +291,9 @@ func (self *BaseAssembler) EmitStrri(ptr JitPtrTt, rst_r obj.Addr, base obj.Addr
 	self.EmitStur(ptr, rst_r, script_reg, offset_i)
 }
 
-func (self *BaseAssembler) EmitStrriRaw(ptr JitPtrTt, op string, rst_r obj.Addr, base obj.Addr, offset_r obj.Addr, offset_i int64, script_reg obj.Addr) {
+func (self *BaseAssembler) EmitStrriWithInsn(ptr JitPtrTt, op string, rst_r obj.Addr, base obj.Addr, offset_r obj.Addr, offset_i int64, script_reg obj.Addr) {
 	self.EmitAdd(script_reg, base, offset_r)
-	self.EmitSturRaw(ptr, op, rst_r, script_reg, offset_i)
-}
-
-func (self *BaseAssembler) EmitSturRaw(ptr JitPtrTt, op string, v obj.Addr, base obj.Addr, unscaled_offset int64) {
-	self.Emit(op, v, ptr(base, unscaled_offset))
-}
-
-func (self *BaseAssembler) EmitLdurRaw(ptr JitPtrTt, op string, base obj.Addr, unscaled_offset int64, v obj.Addr) {
-	self.Emit(op, ptr(base, unscaled_offset), v)
+	self.Emit(op, rst_r, ptr(script_reg, offset_i))
 }
 
 // for CBZ/CBNZ from:reg to:label(Sjmp)
