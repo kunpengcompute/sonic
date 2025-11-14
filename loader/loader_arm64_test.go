@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"testing"
 	"unsafe"
+	"sync"
 
 	. "github.com/bytedance/sonic/loader"
 	"github.com/bytedance/sonic/loader/internal/rt"
@@ -1090,3 +1091,490 @@ func TestWrapC_UnsafePointerSliceData(t *testing.T) {
 	result = sumN(unsafe.Pointer(&slice[0]), 4)
 	require.Equal(t, int64(50), result)
 }
+
+func TestWrapC_ReturnZero(t *testing.T) {
+	// asm function that clear all caller-save reg as 0
+	// accept no args
+	// then return 0
+	var return_zero func(input int64) int64
+
+	ct := []byte {
+		0xfd, 0x7b, 0xbf, 0xa9, // stp x29, x30, [sp, #-0x10]!
+		0xe0, 0x3, 0x1f, 0xaa,  // mov x0, xzr
+		0xf0, 0x3, 0x0, 0xaa,   // mov x16, x0
+		0xf1, 0x3, 0x0, 0xaa,   // mov x17, x0
+		0xe1, 0x3, 0x1f, 0xaa,  // mov x1, xzr
+		0xe2, 0x3, 0x1f, 0xaa,  // mov x2, xzr
+		0xe3, 0x3, 0x1f, 0xaa,  // mov x3, xzr
+		0xe4, 0x3, 0x1f, 0xaa,  // mov x4, xzr
+		0xe5, 0x3, 0x1f, 0xaa,  // mov x5, xzr
+		0xe6, 0x3, 0x1f, 0xaa,  // mov x6, xzr
+		0xe7, 0x3, 0x1f, 0xaa,  // mov x7, xzr
+		0xe8, 0x3, 0x1f, 0xaa,  // mov x8, xzr
+		0xe9, 0x3, 0x1f, 0xaa,  // mov x9, xzr
+		0xea, 0x3, 0x1f, 0xaa,  // mov x10, xzr
+		0xeb, 0x3, 0x1f, 0xaa,  // mov x11, xzr
+		0xec, 0x3, 0x1f, 0xaa,  // mov x12, xzr
+		0xed, 0x3, 0x1f, 0xaa,  // mov x13, xzr
+		0xee, 0x3, 0x1f, 0xaa,  // mov x14, xzr
+		0xef, 0x3, 0x1f, 0xaa,  // mov x15, xzr
+		0xfd, 0x7b, 0xc1, 0xa8, // ldp x29, x30, [sp], #0x10
+		0xc0, 0x3, 0x5f, 0xd6,  // ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "return_zero",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(16),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 16},
+		},
+	}}, []GoC{{
+		CName:  "return_zero",
+		GoFunc: &return_zero,
+	}}, "dummy/native", "dummy/native.c")
+
+	// Test with literal
+	result := return_zero(4)
+	require.Equal(t, int64(0), result)
+
+	result = return_zero(-17)
+	require.Equal(t, int64(0), result)
+}
+
+func TestWrapC_ReturnOne(t *testing.T) {
+	// asm function that clear all caller-save reg as 0
+	// accept no args
+	// then return 1
+	var return_one func(input int64) int64
+
+	ct := []byte {
+		0x20, 0x0, 0x80, 0xd2,  // mov x0, #0x1
+		0x41, 0x15, 0x80, 0xd2, // mov x1, #0xaa
+		0xe2, 0x3, 0x1, 0xaa,   // mov x2, x1
+		0xe3, 0x3, 0x1, 0xaa,   // mov x3, x1
+		0xe4, 0x3, 0x1, 0xaa,   // mov x4, x1
+		0xe5, 0x3, 0x1, 0xaa,   // mov x5, x1
+		0xe6, 0x3, 0x1, 0xaa,   // mov x6, x1
+		0xe7, 0x3, 0x1, 0xaa,   // mov x7, x1
+		0xe8, 0x3, 0x1, 0xaa,   // mov x8, x1
+		0xe9, 0x3, 0x1, 0xaa,   // mov x9, x1
+		0xea, 0x3, 0x1, 0xaa,   // mov x10, x1
+		0xeb, 0x3, 0x1, 0xaa,   // mov x11, x1
+		0xec, 0x3, 0x1, 0xaa,   // mov x12, x1
+		0xed, 0x3, 0x1, 0xaa,   // mov x13, x1
+		0xee, 0x3, 0x1, 0xaa,   // mov x14, x1
+		0xef, 0x3, 0x1, 0xaa,   // mov x15, x1
+		0xf0, 0x3, 0x1, 0xaa,   // mov x16, x1
+		0xf1, 0x3, 0x1, 0xaa,   // mov x17, x1
+		0xc0, 0x3, 0x5f, 0xd6,  // ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "return_one",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0},
+		},
+	}}, []GoC{{
+		CName:  "return_one",
+		GoFunc: &return_one,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		// Test with literal
+		result := return_one(4)
+		require.Equal(t, int64(1), result)
+
+		result = return_one(-17)
+		require.Equal(t, int64(1), result)
+	}
+}
+
+func simplePanic() {
+	panic("an expected panic.")
+}
+
+func simpleNop() {
+}
+
+var _useless int64 = 0
+
+func simpleYak() {
+	_useless += 1
+}
+
+func TestWrapC_CallTwo(t *testing.T) {
+	var call_two func(func (), func ()) int64
+
+	ct := []byte {
+		0xfe, 0xf, 0x1e, 0xf8,	// str x30, [sp, #-0x20]!
+		0xfd, 0x83, 0x1f, 0xf8,	// str x29, [sp, #-0x8]
+		0xfd, 0x23, 0x0, 0x91,	// sub x29, sp, #0x-8
+		0xe0, 0x7, 0x0, 0xf9,	// str x0, [sp, #0x8]
+		0xe1, 0xb, 0x0, 0xf9,	// str x1, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xe0, 0xb, 0x40, 0xf9,	// ldr x0, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xfd, 0xfb, 0x7f, 0xa9,	// ldp x29, x30, [sp, #0x-8]
+		0xff, 0x83, 0x0, 0x91,	// add sp, sp, #0x20
+		0xc0, 0x3, 0x5f, 0xd6,	// ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two",
+		GoFunc: &call_two,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				t.Log("recover: ", e)
+			} else {
+				t.Fatal("no panic")
+			}
+		}()
+		_ = call_two(simpleNop, simplePanic)
+	}
+	{
+		_ = call_two(simpleNop, simpleNop)
+	}
+}
+
+func TestWrapC_CallTwoRec(t *testing.T) {
+	var call_two_rec func(func (), func ()) int64
+
+	ct := []byte {
+		0xfe, 0xf, 0x1e, 0xf8,	// str x30, [sp, #-0x20]!
+		0xfd, 0x83, 0x1f, 0xf8,	// str x29, [sp, #-0x8]
+		0xfd, 0x23, 0x0, 0x91,	// sub x29, sp, #0x-8
+		0xe0, 0x7, 0x0, 0xf9,	// str x0, [sp, #0x8]
+		0xe1, 0xb, 0x0, 0xf9,	// str x1, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xe0, 0xb, 0x40, 0xf9,	// ldr x0, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xfd, 0xfb, 0x7f, 0xa9,	// ldp x29, x30, [sp, #0x-8]
+		0xff, 0x83, 0x0, 0x91,	// add sp, sp, #0x20
+		0xc0, 0x3, 0x5f, 0xd6,	// ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two_rec",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two_rec",
+		GoFunc: &call_two_rec,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				defer func () {
+					if e2 := recover(); e2 != nil {
+						t.Log("recover again: ", e)
+					} else {
+						t.Fatal("expected: panic again; actual: no panic")
+					}
+				}()
+				t.Log("recover: ", e)
+				_ = call_two_rec(simpleNop, simplePanic)
+			} else {
+				t.Fatal("expected: panic; actual: no panic")
+			}
+		}()
+		_ = call_two_rec(simpleNop, simplePanic)
+	}
+}
+
+func TestWrapC_CallTwoC(t *testing.T) {
+	var call_two_c func(func (), func ()) int64
+
+	ct := []byte {
+		0xfd, 0x7b, 0xbe, 0xa9, // stp x29, x30, [sp, #-0x20]!
+		0xfd, 0x3, 0x0, 0x91,   // mov x29, sp
+		0x0, 0x0, 0x40, 0xf9,   // ldr x0, [x0]
+		0x21, 0x0, 0x40, 0xf9,  // ldr x1, [x1]
+		0xe1, 0xf, 0x0, 0xf9,   // str x1, [sp, #0x18]
+		0x0, 0x0, 0x3f, 0xd6,   // blr x0
+		0xe1, 0xf, 0x40, 0xf9,  // ldr x1, [sp, #0x18]
+		0x20, 0x0, 0x3f, 0xd6,  // blr x1
+		0xfd, 0x7b, 0xc2, 0xa8, // ldp x29, x30, [sp], #0x20
+		0xc0, 0x3, 0x5f, 0xd6,  // ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two_c",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two_c",
+		GoFunc: &call_two_c,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				t.Log("successful: recover from panic: ", e)
+			} else {
+				if unrecover_test_switch {
+					t.Fatal("expected: panic; actual: no panic")
+				}
+			}
+		}()
+		if unrecover_test_switch {
+			_ = call_two_c(simpleNop, simplePanic)
+		}
+	}
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				t.Fatal("unexpected panic: ", e)
+			} else {
+				t.Log("successful: no panic")
+			}
+		}()
+		_ = call_two_c(simpleNop, simpleNop)
+	}
+}
+
+func TestWrapC_ClearFp(t *testing.T) {
+	var clear_fp func() int64
+
+	ct := []byte {
+		0xfd, 0x7b, 0xbf, 0xa9, // stp x29, x30, [sp, #0x-10]!
+		0xfd, 0x3, 0x0, 0x91,   // mov x29, sp
+		0x0, 0x0, 0x80, 0xd2,   // mov x0, 0
+		0xfd, 0x7b, 0xc1, 0xa8, // ldp x29, x30, [sp], #0x10
+		0xc0, 0x3, 0x5f, 0xd6,  // ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "clear_fp",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x10),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x10},
+		},
+	}}, []GoC{{
+		CName:  "clear_fp",
+		GoFunc: &clear_fp,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		rst := clear_fp()
+		require.Equal(t, int64(0), rst)
+	}
+}
+
+func TestWrapC_CallTwoCWoFp(t *testing.T) {
+	var call_two_c_wo_fp func(func (), func ()) int64
+
+	ct := []byte {
+		0xfd, 0x7b, 0xbe, 0xa9,	// stp x29, x30, [sp, #-0x20]!
+		0xfd, 0x3, 0x0, 0x91,	// mov x29, sp
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0xe1, 0xb, 0x0, 0xf9,	// str x1, [sp, #0x10]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xe0, 0xb, 0x40, 0xf9,	// ldr x0, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xfd, 0x7b, 0xc2, 0xa8,	// ldp x29, x30, [sp], #0x20
+		0xc0, 0x3, 0x5f, 0xd6,	// ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two_c_wo_fp",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two_c_wo_fp",
+		GoFunc: &call_two_c_wo_fp,
+	}}, "dummy/native", "dummy/native.c")
+
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				t.Log("successful: recover from panic: ", e)
+			} else {
+				if unrecover_test_switch {
+					t.Fatal("expected: panic; actual: no panic")
+				}
+			}
+		}()
+		if unrecover_test_switch {
+			_ = call_two_c_wo_fp(simpleNop, simplePanic)
+		}
+	}
+	{
+		defer func () {
+			if e := recover(); e != nil {
+				t.Fatal("unexpected panic: ", e)
+			} else {
+				t.Log("successful: no panic")
+			}
+		}()
+		_ = call_two_c_wo_fp(simpleNop, simpleNop)
+	}
+}
+
+func TestWrapC_CallGC(t *testing.T) {
+	var call_two func(func (), func ()) int64
+
+	ct := []byte {
+		0xfe, 0xf, 0x1e, 0xf8,	// str x30, [sp, #-0x20]!
+		0xfd, 0x83, 0x1f, 0xf8,	// str x29, [sp, #-0x8]
+		0xfd, 0x23, 0x0, 0x91,	// sub x29, sp, #0x-8
+		0xe0, 0x7, 0x0, 0xf9,	// str x0, [sp, #0x8]
+		0xe1, 0xb, 0x0, 0xf9,	// str x1, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xe0, 0xb, 0x40, 0xf9,	// ldr x0, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xfd, 0xfb, 0x7f, 0xa9,	// ldp x29, x30, [sp, #0x-8]
+		0xff, 0x83, 0x0, 0x91,	// add sp, sp, #0x20
+		0xc0, 0x3, 0x5f, 0xd6,	// ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two",
+		GoFunc: &call_two,
+	}}, "dummy/native", "dummy/native.c")
+
+	wg := sync.WaitGroup {}
+	subtest_nop := func () {
+		defer wg.Done()
+		call_two(simpleNop, simpleNop)
+	}
+	subtest_panic := func () {
+		defer func () { if r := recover(); r != nil { } else { t.Fatal("no panic") } }()
+		defer wg.Done()
+		call_two(simpleNop, simplePanic)
+	}
+	for idx := 0; idx <= 253; idx += 1 {
+		wg.Add(1)
+		go subtest_nop()
+		if idx % 3 == 0 {
+			wg.Add(1)
+			go subtest_panic()
+		}
+		if idx == 81 {
+			go func () {
+				for ;; {
+					runtime.GC()
+				}
+			}()
+		}
+	}
+	wg.Wait()
+}
+
+func TestWrapC_CallConcurrent(t *testing.T) {
+	var call_two func(func (), func ()) int64
+
+	ct := []byte {
+		0xfe, 0xf, 0x1e, 0xf8,	// str x30, [sp, #-0x20]!
+		0xfd, 0x83, 0x1f, 0xf8,	// str x29, [sp, #-0x8]
+		0xfd, 0x23, 0x0, 0x91,	// sub x29, sp, #0x-8
+		0xe0, 0x7, 0x0, 0xf9,	// str x0, [sp, #0x8]
+		0xe1, 0xb, 0x0, 0xf9,	// str x1, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xe0, 0xb, 0x40, 0xf9,	// ldr x0, [sp, #0x10]
+		0x0, 0x0, 0x40, 0xf9,	// ldr x0, [x0]
+		0x0, 0x0, 0x3f, 0xd6,	// blr x0
+		0xfd, 0xfb, 0x7f, 0xa9,	// ldp x29, x30, [sp, #0x-8]
+		0xff, 0x83, 0x0, 0x91,	// add sp, sp, #0x20
+		0xc0, 0x3, 0x5f, 0xd6,	// ret
+	}
+
+	WrapGoC(ct, []CFunc{{
+		Name:     "call_two",
+		EntryOff: 0,
+		TextSize: uint32(len(ct)),
+		MaxStack: uintptr(0x20),
+		Pcsp: [][2]uint32{
+			{uint32(len(ct)), 0x20},
+		},
+	}}, []GoC{{
+		CName:  "call_two",
+		GoFunc: &call_two,
+	}}, "dummy/native", "dummy/native.c")
+
+	wg := sync.WaitGroup {}
+	subtest_nop := func () {
+		defer wg.Done()
+		call_two(simpleNop, simpleNop)
+	}
+	subtest_panic := func () {
+		defer func () { if r := recover(); r != nil { } else { t.Fatal("no panic") } }()
+		defer wg.Done()
+		call_two(simpleNop, simplePanic)
+	}
+	subtest_yak  := func () {
+		defer wg.Done()
+		call_two(simpleNop, simpleYak)
+	}
+	for idx := 0; idx <= 253; idx += 1 {
+		wg.Add(1)
+		go subtest_nop()
+		if idx % 3 == 0 {
+			wg.Add(1)
+			go subtest_panic()
+		}
+		if idx % 7 == 0 {
+			wg.Add(1)
+			go subtest_yak()
+		}
+	}
+	wg.Wait()
+}
+
+var unrecover_test_switch bool = false
+
+/// c abi | leaf | panic | corrupt fp |    test function |     test result
+///    no |  yes |    no |         no |      return_zero |              ok
+///    no |   no |   yes |         no |         call_two |       (panic)ok
+///    no |   no |    no |         no |         call_two |              ok
+///   yes |  yes |    no |        yes |         clear_fp |              ok
+///   yes |   no |   yes |        yes |       call_two_c | unrecover panic
+///   yes |   no |    no |        yes |       call_two_c |              ok
+///   yes |   no |   yes |         no | call_two_c_wo_fp | unrecover panic
+///   yes |   no |    no |         no | call_two_c_wo_fp |              ok
