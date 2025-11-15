@@ -34,6 +34,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMain(m *testing.M) {
+	encoder.ForceUseJit()
+	m.Run()
+}
+
 type testOps struct {
 	key string
 	ins ir.Program
