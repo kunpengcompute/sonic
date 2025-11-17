@@ -32,10 +32,6 @@ import (
 )
 
 func TestLoadARM64(t *testing.T) {
-	if runtime.GOARCH != "arm64" {
-		t.Skip("This test uses ARM64-specific bytecode")
-	}
-
 	var hstr string
 
 	type TestFunc func(i *int, hook func(i *int)) int
@@ -128,6 +124,9 @@ func TestLoadARM64(t *testing.T) {
 
 	f := *(*TestFunc)(unsafe.Pointer(&rets[0]))
 	i := 1
+	runtime.SetFinalizer(&i, func(x *int) {
+		println("i got GC: ", x)
+	})
 	j := f(&i, hook)
 	require.Equal(t, 2, j)
 	require.Equal(t, "hook1", hstr)
@@ -272,7 +271,7 @@ func TestWrapC_SingleInt64(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "increment",
@@ -310,7 +309,7 @@ func TestWrapC_SingleFloat64(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "double_value",
@@ -348,7 +347,7 @@ func TestWrapC_TwoInt64(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "add",
@@ -386,7 +385,7 @@ func TestWrapC_SinglePointer(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "ptr_value",
@@ -395,6 +394,9 @@ func TestWrapC_SinglePointer(t *testing.T) {
 
 	// Test the function
 	var x int64 = 42
+	runtime.SetFinalizer(&x, func(x *int64) {
+		println("x got GC: ", x)
+	})
 	ptr := unsafe.Pointer(&x)
 	result := ptrValue(ptr)
 	expected := int64(uintptr(ptr))
@@ -426,7 +428,7 @@ func TestWrapC_TwoPointers(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "copy_value",
@@ -435,7 +437,13 @@ func TestWrapC_TwoPointers(t *testing.T) {
 
 	// Test the function
 	src := int64(100)
+	runtime.SetFinalizer(&src, func(x *int64) {
+		println("src got GC: ", x)
+	})
 	dst := int64(0)
+	runtime.SetFinalizer(&dst, func(x *int64) {
+		println("dst got GC: ", x)
+	})
 	result := copyValue(&src, &dst)
 	require.Equal(t, int64(100), result, "return value should match src")
 	require.Equal(t, int64(100), dst, "dst should be copied from src")
@@ -478,7 +486,7 @@ func TestWrapC_ThreePointers(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "add_ptrs",
@@ -487,8 +495,17 @@ func TestWrapC_ThreePointers(t *testing.T) {
 
 	// Test the function
 	a := int64(10)
+	runtime.SetFinalizer(&a, func(x *int64) {
+		println("a got GC: ", x)
+	})
 	b := int64(32)
+	runtime.SetFinalizer(&b, func(x *int64) {
+		println("b got GC: ", x)
+	})
 	result := int64(0)
+	runtime.SetFinalizer(&result, func(x *int64) {
+		println("result got GC: ", x)
+	})
 	ret := addPtrs(&a, &b, &result)
 	require.Equal(t, int64(42), ret)
 	require.Equal(t, int64(42), result)
@@ -523,7 +540,7 @@ func TestWrapC_MixedPointerAndInt(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "add_offset",
@@ -532,6 +549,9 @@ func TestWrapC_MixedPointerAndInt(t *testing.T) {
 
 	// Test the function
 	value := int64(40)
+	runtime.SetFinalizer(&value, func(x *int64) {
+		println("value got GC: ", x)
+	})
 	result := addOffset(&value, 2)
 	require.Equal(t, int64(42), result)
 
@@ -573,7 +593,7 @@ func TestWrapC_PointerSwap(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "swap",
@@ -582,7 +602,13 @@ func TestWrapC_PointerSwap(t *testing.T) {
 
 	// Test the function
 	a := int64(10)
+	runtime.SetFinalizer(&a, func(x *int64) {
+		println("a got GC: ", x)
+	})
 	b := int64(20)
+	runtime.SetFinalizer(&b, func(x *int64) {
+		println("b got GC: ", x)
+	})
 	result := swap(&a, &b)
 	require.Equal(t, int64(20), result, "return value should be new *a")
 	require.Equal(t, int64(20), a, "a should now have b's original value")
@@ -624,7 +650,7 @@ func TestWrapC_PointerChain(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "increment_deref",
@@ -633,8 +659,17 @@ func TestWrapC_PointerChain(t *testing.T) {
 
 	// Test the function
 	value := int64(41)
+	runtime.SetFinalizer(&value, func(x *int64) {
+		println("value got GC: ", x)
+	})
 	ptr := &value
+	runtime.SetFinalizer(&ptr, func(x **int64) {
+		println("ptr got GC: ", x)
+	})
 	pptr := &ptr
+	runtime.SetFinalizer(&pptr, func(x ***int64) {
+		println("pptr got GC: ", x)
+	})
 	result := incrementDeref(pptr)
 	require.Equal(t, int64(42), result)
 	require.Equal(t, int64(42), value, "original value should be incremented")
@@ -670,7 +705,7 @@ func TestWrapC_UnsafePointerArray(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "sum_array",
@@ -679,6 +714,9 @@ func TestWrapC_UnsafePointerArray(t *testing.T) {
 
 	// Test the function
 	arr := [3]int64{10, 20, 12}
+	runtime.SetFinalizer(&arr, func(x *[3]int64) {
+		println("c got GC: ", x)
+	})
 	result := sumArray(unsafe.Pointer(&arr[0]))
 	require.Equal(t, int64(42), result)
 
@@ -712,7 +750,7 @@ func TestWrapC_TwoUnsafePointers(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "memcpy_int64",
@@ -721,7 +759,13 @@ func TestWrapC_TwoUnsafePointers(t *testing.T) {
 
 	// Test the function
 	src := int64(42)
+	runtime.SetFinalizer(&src, func(x *int64) {
+		println("src got GC: ", x)
+	})
 	dst := int64(0)
+	runtime.SetFinalizer(&dst, func(x *int64) {
+		println("dst got GC: ", x)
+	})
 	result := memcpyInt64(unsafe.Pointer(&dst), unsafe.Pointer(&src))
 	require.Equal(t, int64(42), result)
 	require.Equal(t, int64(42), dst)
@@ -757,7 +801,7 @@ func TestWrapC_UnsafePointerWithOffset(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "read_offset",
@@ -766,6 +810,9 @@ func TestWrapC_UnsafePointerWithOffset(t *testing.T) {
 
 	// Test the function
 	arr := [4]int64{10, 20, 30, 40}
+	runtime.SetFinalizer(&arr, func(x *[4]int64) {
+		println("arr got GC: ", x)
+	})
 	result := readOffset(unsafe.Pointer(&arr[0]), 0)
 	require.Equal(t, int64(10), result)
 
@@ -810,7 +857,7 @@ func TestWrapC_ThreeUnsafePointers(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "triple_op",
@@ -819,8 +866,17 @@ func TestWrapC_ThreeUnsafePointers(t *testing.T) {
 
 	// Test the function
 	a := int64(6)
+	runtime.SetFinalizer(&a, func(x *int64) {
+		println("a got GC: ", x)
+	})
 	b := int64(7)
+	runtime.SetFinalizer(&b, func(x *int64) {
+		println("b got GC: ", x)
+	})
 	result := int64(0)
+	runtime.SetFinalizer(&result, func(x *int64) {
+		println("result got GC: ", x)
+	})
 	ret := tripleOp(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	require.Equal(t, int64(42), ret)
 	require.Equal(t, int64(42), result)
@@ -859,7 +915,7 @@ func TestWrapC_UnsafePointerStructAccess(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "sum_struct",
@@ -873,6 +929,9 @@ func TestWrapC_UnsafePointerStructAccess(t *testing.T) {
 	}
 
 	s := TestStruct{A: 20, B: 22}
+	runtime.SetFinalizer(&s, func(x *TestStruct) {
+		println("s got GC: ", x)
+	})
 	result := sumStruct(unsafe.Pointer(&s))
 	require.Equal(t, int64(42), result)
 
@@ -907,7 +966,7 @@ func TestWrapC_MixedUnsafePointerAndTypedPointer(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "mixed_ptr",
@@ -916,7 +975,13 @@ func TestWrapC_MixedUnsafePointerAndTypedPointer(t *testing.T) {
 
 	// Test the function
 	a := int64(30)
+	runtime.SetFinalizer(&a, func(x *int64) {
+		println("a got GC: ", x)
+	})
 	b := int64(12)
+	runtime.SetFinalizer(&b, func(x *int64) {
+		println("b got GC: ", x)
+	})
 	result := mixedPtr(unsafe.Pointer(&a), &b)
 	require.Equal(t, int64(42), result)
 
@@ -946,7 +1011,7 @@ func TestWrapC_UnsafePointerReturnOnly(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "const_value",
@@ -955,6 +1020,9 @@ func TestWrapC_UnsafePointerReturnOnly(t *testing.T) {
 
 	// Test the function with various pointers
 	var x int64
+	runtime.SetFinalizer(&x, func(x *int64) {
+		println("x got GC: ", x)
+	})
 	result := constValue(unsafe.Pointer(&x))
 	require.Equal(t, int64(42), result)
 
@@ -1006,7 +1074,7 @@ func TestWrapC_UnsafePointerSliceData(t *testing.T) {
 		TextSize: uint32(len(ct)),
 		MaxStack: uintptr(0),
 		Pcsp: [][2]uint32{
-			{1, 0},
+			{uint32(len(ct)), 0},
 		},
 	}}, []GoC{{
 		CName:  "sum_n",

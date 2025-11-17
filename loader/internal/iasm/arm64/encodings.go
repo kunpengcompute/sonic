@@ -146,8 +146,27 @@ func encodeLoadStore(op uint32, size uint32, rt Register, mem *MemoryOperand) ui
 	rn := encodeRegister(mem.Base)
 	rtEnc := encodeRegister(rt)
 
+	// Determine V (vector) bit: 1 for FP/SIMD registers (D/S/V), 0 for GPR
+	var vBit uint32 = 0
+	switch rt.(type) {
+	case DRegister, SRegister, VRegister:
+		vBit = 1
+	default:
+		vBit = 0
+	}
+
 	switch mem.Mode {
 	case AddrModeOffset:
+		// Support both positive and negative offsets
+		// Positive: use unsigned offset encoding (imm12)
+		// Negative: use STUR/LDUR encoding (imm9)
+		if mem.Offset < 0 {
+			// Use unscaled immediate offset (STUR/LDUR): -256 to +255
+			imm9 := encodeImm9(mem.Offset)
+			// Format: size 111 V 00 opc 0 imm9 00 rn rt
+			fixedBits := uint32(0x38<<24) | (op << 22)
+			return (size << 30) | fixedBits | (imm9 << 12) | (rn << 5) | rtEnc
+		}
 		// Unsigned offset: [base, #offset]
 		// Format: size 111 V 00 opc imm12 rn rt
 		// V=0 for GPR, V=1 for FP/SIMD
@@ -162,20 +181,22 @@ func encodeLoadStore(op uint32, size uint32, rt Register, mem *MemoryOperand) ui
 			panic(fmt.Sprintf("offset out of range: %d", offset))
 		}
 		// Bits 29-22: 111 V 00 opc
-		// For GPR (V=0): 111 0 00 opc = 0x38 | (op<<0) = 0x38 + op
-		// vBit := uint32(0)                                       // GPR
-		fixedBits := uint32(0x39<<24) | (op << 22) // = 111 V 00 opc
+		// Use base 0x39 for unsigned offset encoding, then set V bit and opc
+		fixedBits := (0x39 << 24) | (vBit << 26) | (op << 22)
 		return (size << 30) | fixedBits | (scaledOffset << 10) | (rn << 5) | rtEnc
 
 	case AddrModePreIndex:
 		// Pre-indexed: [base, #offset]!
 		imm9 := encodeImm9(mem.Offset)
-		return (size << 30) | (op << 22) | (imm9 << 12) | (0x3 << 10) | (rn << 5) | rtEnc
+		// Use unscaled immediate encoding base bits (same as STUR/LDUR format)
+		fixedBits := (0x38 << 24) | (vBit << 26) | (op << 22)
+		return (size << 30) | fixedBits | (imm9 << 12) | (0x3 << 10) | (rn << 5) | rtEnc
 
 	case AddrModePostIndex:
 		// Post-indexed: [base], #offset
 		imm9 := encodeImm9(mem.Offset)
-		return (size << 30) | (op << 22) | (imm9 << 12) | (0x1 << 10) | (rn << 5) | rtEnc
+		fixedBits := (0x38 << 24) | (vBit << 26) | (op << 22)
+		return (size << 30) | fixedBits | (imm9 << 12) | (0x1 << 10) | (rn << 5) | rtEnc
 
 	case AddrModeRegister, AddrModeExtended:
 		// Register offset: [base, index]
@@ -185,7 +206,8 @@ func encodeLoadStore(op uint32, size uint32, rt Register, mem *MemoryOperand) ui
 		if mem.Scale > 0 {
 			s = 1
 		}
-		return (size << 30) | (0x1c << 24) | (op << 22) | (1 << 21) | (rm << 16) | (option << 13) | (s << 12) | (rn << 5) | rtEnc
+		// Include V bit for FP/SIMD
+		return (size << 30) | (0x1c << 24) | (vBit << 26) | (op << 22) | (1 << 21) | (rm << 16) | (option << 13) | (s << 12) | (rn << 5) | rtEnc
 
 	default:
 		panic(fmt.Sprintf("unsupported addressing mode: %v", mem.Mode))

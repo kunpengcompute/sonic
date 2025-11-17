@@ -322,12 +322,12 @@ func (self *Frame) emitGrowStack(p *Program, entry *Label) {
 	// LR (X30) contains our return address - morestack needs it in R3!
 
 	// Step 1: Spill register arguments to their spill slots in caller's frame FIRST
-	// IMPORTANT: Must save args before moving LR to R3, because R3 might contain arg data!
 	// These slots are at POSITIVE offsets from current SP
+	// IMPORTANT: Must save args BEFORE moving LR to R3, because R3 might contain arg data!
 	for _, v := range self.desc.Args {
 		if v.InRegister {
 			// v.Mem contains the spill slot offset in caller's frame
-			offset := int32(v.Mem)
+			offset := int32(v.Mem) + 8
 			if v.IsFloat == floatKind64 {
 				p.STR(arm64.DRegister(v.Reg.(VRegister)), Ptr(SP, offset))
 			} else if v.IsFloat == floatKind32 {
@@ -340,7 +340,7 @@ func (self *Frame) emitGrowStack(p *Program, entry *Label) {
 
 	// Step 2: Move LR to R3 (morestack calling convention)
 	// morestack will save R3 to g->sched->gobuf_lr
-	// MUST do this AFTER saving args, since R3 might be an argument register!
+	// NOW it's safe to move X30 to X3 since all args (including X3 if it was an arg) are saved
 	p.MOV(X3, X30)
 
 	// Step 3: Call runtime.morestack_noctxt
@@ -360,7 +360,7 @@ func (self *Frame) emitGrowStack(p *Program, entry *Label) {
 	// Reload register arguments from their spill slots
 	for _, v := range self.desc.Args {
 		if v.InRegister {
-			offset := int32(v.Mem)
+			offset := int32(v.Mem) + 8
 			if v.IsFloat == floatKind64 {
 				p.LDR(arm64.DRegister(v.Reg.(VRegister)), Ptr(SP, offset))
 			} else if v.IsFloat == floatKind32 {
@@ -386,36 +386,38 @@ func (self *Frame) GrowStackTextSize() uint32 {
 }
 
 func (self *Frame) emitPrologue(p *Program, maxStack uintptr) {
-	// ARM64 prologue:
-	// SUB SP, SP, #frameSize           (allocate stack space)
-	// Reserved registers (X29, X30, X28) will be saved by emitReserveRegs
-	// frameSize must include:
-	// - baseFrameSize (for reserved registers and locals)
-	// - maxStack (for C function call stack usage)
+	// ARM64 standard prologue (following Go compiler conventions):
+	// 1. STR X30, [SP, #-frameSize]!   (pre-index: allocate stack and save LR)
+	// 2. STUR X29, [SP, #-8]           (save old FP)
+	// 3. SUB X29, SP, #8               (set new FP)
 
-	baseFrameSize := self.Size()
-	// Add maxStack for C function call stack space
-	// ARM64 requires 16-byte stack alignment
-	frameSize := alignUp(baseFrameSize+uint32(maxStack), 16)
+	// Step 1: Allocate stack and save X30, X29 together
+	// Standard Go uses: STR.W X30, [SP, #-frameSize]! then STUR X29, [SP, #-8]
+	// But we save both inside the frame for simplicity
+	mem := &arm64.MemoryOperand{
+		Base:   SP,
+		Offset: -int32(self.Size()),
+		Mode:   arm64.AddrModePreIndex,
+	}
+	p.STR(X30, mem)
+	p.STR(X29, Ptr(SP, -8)) // Save X29 (FP) at SP-8
 
-	// Allocate stack space
-	p.SUB(SP, SP, int(frameSize))
+	// Step 3: Set new FP = SP - 8 (pointing to saved old FP)
+	// This allows FP chain: [FP] points to previous FP
+	p.SUB(X29, SP, 8)
 }
 
 func (self *Frame) emitEpilogue(p *Program, maxStack uintptr) {
-	// ARM64 epilogue:
-	// Reserved registers (X29, X30, X28) will be restored by emitRestoreRegs
-	// ADD SP, SP, #frameSize           (deallocate stack space)
-	// RET
+	// ARM64 standard epilogue (following Go compiler conventions):
+	// 1. LDP (X29, X30), [SP, #...]    (restore FP and LR)
+	// 2. ADD SP, SP, #frameSize        (deallocate stack)
+	// 3. RET
 
-	baseFrameSize := self.Size()
-	// Add maxStack for C function call stack space (same as prologue)
-	// ARM64 requires 16-byte stack alignment
-	frameSize := alignUp(baseFrameSize+uint32(maxStack), 16)
-
+	// Restore X29 (FP) and X30 (LR) from stack
+	p.LDR(X30, Ptr(SP, 0))  // Restore X30 from SP-0
+	p.LDR(X29, Ptr(SP, -8)) // Restore X29 from SP-8
 	// Deallocate stack space
-	p.ADD(SP, SP, int(frameSize))
-
+	p.ADD(SP, SP, int(self.Size()))
 	// RET
 	p.RET()
 }
@@ -427,169 +429,40 @@ func (self *Frame) emitEpilogue(p *Program, maxStack uintptr) {
 // - X28 (g): Current goroutine pointer - critical for Go runtime
 func ReservedRegs(callc bool) []Register {
 	return []Register{
-		X29, // frame pointer (FP)
-		X30, // link register (LR)
 		X28, // current goroutine (g)
 	}
 }
 
 func (self *Frame) emitReserveRegs(p *Program) {
-	// Spill reserved registers to stack
-	// Optimize: use STP for X29, X30 pair (first two registers)
-	regs := ReservedRegs(self.ccall)
-
-	// Save X29 and X30 together using STP (more efficient)
-	if len(regs) >= 2 {
-		if r0, ok := regs[0].(Register64); ok {
-			if r1, ok := regs[1].(Register64); ok {
-				// STP X29, X30, [SP, #0]
-				p.STP(r0, r1, Ptr(SP, 0))
-
-				// Save remaining registers individually
-				for i := 2; i < len(regs); i++ {
-					switch r := regs[i].(type) {
-					case Register64:
-						p.STR(r, Ptr(SP, int32(i*PtrSize)))
-					case VRegister:
-						p.STR(arm64.DRegister(r), Ptr(SP, int32(i*PtrSize)))
-					default:
-						panic(fmt.Sprintf("unsupported register type %T to reserve", r))
-					}
-				}
-				return
-			}
-		}
-	}
-
-	// Fallback: save all registers individually
-	for i, r := range regs {
-		switch r := r.(type) {
-		case Register64:
-			p.STR(r, Ptr(SP, int32(i*PtrSize)))
-		case VRegister:
-			p.STR(arm64.DRegister(r), Ptr(SP, int32(i*PtrSize)))
-		default:
-			panic(fmt.Sprintf("unsupported register type %T to reserve", r))
-		}
-	}
+	// Save X28 (g pointer) to stack
+	// X30 and X29 are already saved in emitPrologue
+	// X30 is at [SP-0], X29 is at [SP+8], X29 points to [SP+8]
+	// Save X28 at [SP-16]
+	p.STR(X28, Ptr(SP, 8))
 }
 
 func (self *Frame) emitRestoreRegs(p *Program) {
-	// Restore reserved registers from stack
-	// Optimize: use LDP for X29, X30 pair (first two registers)
-	regs := ReservedRegs(self.ccall)
-
-	// Restore X29 and X30 together using LDP (more efficient)
-	if len(regs) >= 2 {
-		if r0, ok := regs[0].(Register64); ok {
-			if r1, ok := regs[1].(Register64); ok {
-				// LDP X29, X30, [SP, #0]
-				p.LDP(r0, r1, Ptr(SP, 0))
-
-				// Restore remaining registers individually
-				for i := 2; i < len(regs); i++ {
-					switch r := regs[i].(type) {
-					case Register64:
-						p.LDR(r, Ptr(SP, int32(i*PtrSize)))
-					case VRegister:
-						p.LDR(arm64.DRegister(r), Ptr(SP, int32(i*PtrSize)))
-					default:
-						panic(fmt.Sprintf("unsupported register type %T to restore", r))
-					}
-				}
-				return
-			}
-		}
-	}
-
-	// Fallback: restore all registers individually
-	for i, r := range regs {
-		switch r := r.(type) {
-		case Register64:
-			p.LDR(r, Ptr(SP, int32(i*PtrSize)))
-		case VRegister:
-			p.LDR(arm64.DRegister(r), Ptr(SP, int32(i*PtrSize)))
-		default:
-			panic(fmt.Sprintf("unsupported register type %T to restore", r))
-		}
-	}
+	// Restore X28 (g pointer) from stack
+	// X30 and X29 will be restored in emitEpilogue
+	p.LDR(X28, Ptr(SP, 8))
 }
 
 func (self *Frame) emitStackCheck(p *Program, to *Label, maxStack uintptr) {
 	// ARM64 stack check: compare SP - frameSize with g.stackguard0
 	// g is in X28, stackguard0 is at offset 16 in g struct
-	// Use X9 as temporary register to calculate SP - frameSize
 	// Note: frameSize must include space for reserved registers and maxStack
 	baseFrameSize := self.Size()
 	// Add maxStack for C function call stack space
 	// frameSize must match what prologue allocates
-	frameSize := alignUp(baseFrameSize+uint32(maxStack), 16)
-	p.SUB(X9, SP, int(frameSize))
-	p.LDR(X10, Ptr(X28, 16)) // load g.stackguard0
-	p.CMP(X9, X10)           // compare calculated SP with stackguard0 (X9 - X10, sets flags)
-	//p.BLO(to)                // branch if calculated SP < stackguard0 (unsigned less than)
-}
-
-func (self *Frame) emitSpillPtrs(p *Program) {
-	// Spill pointer argument registers to stack for GC
-	// Save pointers to our own stack frame, not to caller's spill slots
-	for i, r := range self.desc.Args {
-		if r.InRegister && r.IsPointer {
-			// Calculate offset within our frame
-			// After prologue and emitReserveRegs:
-			// SP points to [reserved regs: X29, X30, X28] (24 bytes)
-			// We save pointers after the reserved registers
-			numReserved := len(ReservedRegs(self.ccall))
-			offset := numReserved*PtrSize + i*8
-			fmt.Printf("Spilling pointer arg %d register %v to offset %d", i, r.Reg, offset)
-
-			// STR Xreg, [SP, #offset]
-			p.STR(r.Reg.(Register64), Ptr(SP, int32(offset)))
-		}
-	}
+	frameSize := alignUp(baseFrameSize+uint32(maxStack), 0x10)
+	p.LDR(X16, Ptr(X28, 0x10)) // load g.stackguard0
+	p.SUB(X17, SP, int(frameSize))
+	p.CMP(X17, X16) // compare calculated SP with stackguard0 (X9 - X10, sets flags)
+	p.BLS(to)       // branch if calculated SP < stackguard0 (unsigned less than)
 }
 
 func (self *Frame) emitExchangeArgs(p *Program) {
-	// ARM64 register exchange for Go ABI to C ABI
-	//
-	// Go internal ABI for ARM64 uses:
-	// - Integer/pointer arguments: R0-R15 (X0-X15)
-	// - Float arguments: F0-F15 (V0-V15)
-	//
-	// C ABI (AAPCS64) for ARM64 uses:
-	// - Integer/pointer arguments: X0-X7
-	// - Float arguments: V0-V7
-	//
-	// Since the first 8 integer registers (X0-X7) and first 8 float registers (V0-V7)
-	// are the same in both ABIs, arguments that fit in these registers don't need exchange.
-	// For arguments beyond X7/V7, they would need to be moved to stack for C calls,
-	// but currently our implementation only supports up to 8 register arguments.
 
-	// Count arguments by type
-	iregArgs := 0
-	vregArgs := 0
-
-	for _, v := range self.desc.Args {
-		if v.InRegister {
-			if v.IsFloat != notFloatKind {
-				vregArgs++
-			} else {
-				iregArgs++
-			}
-		}
-	}
-
-	// Validate we don't exceed C ABI limits
-	if iregArgs > len(iregOrderC) {
-		panic(fmt.Sprintf("too many integer arguments (%d), C ABI supports at most %d", iregArgs, len(iregOrderC)))
-	}
-	if vregArgs > len(vregOrderC) {
-		panic(fmt.Sprintf("too many float arguments (%d), C ABI supports at most %d", vregArgs, len(vregOrderC)))
-	}
-
-	// For arguments that fit in X0-X7 and V0-V7, they're already in the correct
-	// registers for both Go and C ABIs, so no exchange is needed.
-	// This is different from AMD64 where Go and C use different register orders.
 }
 
 func (self *Frame) emitExchangeRets(p *Program) {
@@ -689,14 +562,10 @@ func CallC(addr uintptr, fr Frame, maxStack uintptr) []byte {
 
 	// Entry point
 	p.Link(entry)
-
-	// Always emit stack check like AMD64 version does
 	fr.emitStackCheck(p, stack, maxStack)
-
 	fr.emitPrologue(p, maxStack)
+
 	fr.emitReserveRegs(p)
-	fr.emitSpillPtrs(p)
-	fr.emitExchangeArgs(p)
 	fr.emitCallC(p, addr)
 	fr.emitExchangeRets(p)
 	fr.emitRestoreRegs(p)
@@ -715,11 +584,8 @@ func (self *Frame) StackCheckTextSize() uint32 {
 	// Note: This must match the exact code generated by emitStackCheck
 	// Including maxStack in calculation to match runtime behavior
 	p := DefaultArch.CreateProgram()
-	p.SUB(X9, SP, 0) // Placeholder - actual size computed separately
-	p.LDR(X10, Ptr(X28, 16))
-	p.CMP(X9, X10)
 	to := CreateLabel("")
 	p.Link(to)
-	p.BLO(to)
+	self.emitStackCheck(p, to, 0)
 	return uint32(len(p.Assemble(0)))
 }

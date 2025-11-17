@@ -153,6 +153,44 @@ func TestLDR_STR(t *testing.T) {
 	}
 }
 
+func TestSTRPreIndex(t *testing.T) {
+	p := NewProgram()
+
+	// STR X30, [SP, #-0x70]!
+	// Expected machine code (little-endian bytes): FE 0F 19 F8
+	// As uint32 little-endian value: 0xF8190FFE
+	mem := Ptr(SP, -0x70)
+	mem.Mode = AddrModePreIndex
+	p.STR(X30, mem)
+
+	if len(p.insns) != 1 {
+		t.Fatalf("Expected 1 instruction, got %d", len(p.insns))
+	}
+
+	ins := p.insns[0].enc
+
+	// idx bits (bits 11-10) should be 0x3 for pre-index
+	if ((ins >> 10) & 0x3) != 0x3 {
+		t.Errorf("Expected pre-index idx=3, got %d", (ins>>10)&0x3)
+	}
+
+	// Rn should be SP (31)
+	if ((ins >> 5) & 0x1f) != uint32(SP.RegIndex()) {
+		t.Errorf("Expected Rn=SP(31), got %d", (ins>>5)&0x1f)
+	}
+
+	// Rt should be X30 (30)
+	if (ins & 0x1f) != uint32(X30.RegIndex()) {
+		t.Errorf("Expected Rt=X30(30), got %d", ins&0x1f)
+	}
+
+	// Check full encoding equals expected machine code
+	expected := uint32(0xF8190FFE)
+	if ins != expected {
+		t.Errorf("Expected encoding 0x%08x (FE 0F 19 F8), got 0x%08x", expected, ins)
+	}
+}
+
 func TestSTP_LDP(t *testing.T) {
 	p := NewProgram()
 
@@ -243,6 +281,44 @@ func TestAssemble(t *testing.T) {
 
 	// Print hex for debugging
 	t.Logf("Assembled code: %s", hex.EncodeToString(code))
+}
+
+// Test LDR/STR for floating point registers (D/S) to ensure V bit and size are encoded
+func TestLDR_STR_Float(t *testing.T) {
+	p := NewProgram()
+
+	// STR D0, [SP, #16]
+	p.STR(D0, Ptr(SP, 16))
+	// LDR D1, [SP, #24]
+	p.LDR(D1, Ptr(SP, 24))
+
+	// STR S0, [SP, #8]
+	p.STR(S0, Ptr(SP, 8))
+	// LDR S1, [SP, #12]
+	p.LDR(S1, Ptr(SP, 12))
+
+	if len(p.insns) != 4 {
+		t.Fatalf("Expected 4 instructions, got %d", len(p.insns))
+	}
+
+	// Compare exact expected machine code (bytes given as little-endian uint32)
+	// Expected bytes (little-endian):
+	// STR D0, [SP, #16] -> E0 0B 00 FD  => uint32 0xFD000BE0
+	// LDR D1, [SP, #24] -> E1 0F 40 FD  => uint32 0xFD400FE1
+	// STR S0, [SP, #8]  -> E0 0B 00 BD  => uint32 0xBD000BE0
+	// LDR S1, [SP, #12] -> E1 0F 40 BD  => uint32 0xBD400FE1
+	expected := []uint32{
+		0xFD000BE0,
+		0xFD400FE1,
+		0xBD000BE0,
+		0xBD400FE1,
+	}
+
+	for i, ins := range p.insns {
+		if ins.enc != expected[i] {
+			t.Errorf("Instruction %d: encoding mismatch, got 0x%08x, want 0x%08x", i, ins.enc, expected[i])
+		}
+	}
 }
 
 func TestProgramWithLabels(t *testing.T) {
