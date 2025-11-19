@@ -438,13 +438,13 @@ func (self *Frame) emitReserveRegs(p *Program) {
 	// X30 and X29 are already saved in emitPrologue
 	// X30 is at [SP-0], X29 is at [SP+8], X29 points to [SP+8]
 	// Save X28 at [SP-16]
-	p.STR(X28, Ptr(SP, 8))
+	//p.STR(X28, Ptr(SP, 8)) // asm2asm will used fixed-x28
 }
 
 func (self *Frame) emitRestoreRegs(p *Program) {
 	// Restore X28 (g pointer) from stack
 	// X30 and X29 will be restored in emitEpilogue
-	p.LDR(X28, Ptr(SP, 8))
+	// p.LDR(X28, Ptr(SP, 8))
 }
 
 func (self *Frame) emitStackCheck(p *Program, to *Label, maxStack uintptr) {
