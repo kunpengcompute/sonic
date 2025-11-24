@@ -80,10 +80,6 @@ var (
 	_DBG_BRK_ALL = false
 )
 
-var (
-	_USE_B64ENCODE_GO = true
-)
-
 const (
 	_REG_BYTES = 8
 	// 10 reg slots for other callee fns
@@ -103,7 +99,6 @@ const (
 	// (previous) argument slot = frame size + return address slot
 	// (previous) argument slot = frame pointer offset + return address slot + frame pointer slot
 	_fargs_base = _FP_base + _REG_BYTES*2
-	// TODO unknown: frame general slot size
 	FP_offs = _FP_size - _REG_BYTES*2
 )
 
@@ -233,8 +228,6 @@ const (
 	_IM_array = 0x5d5b
 	// {}
 	_IM_object = 0x7d7b
-	// TODO: what usage, only used in _OP_bin
-	_IM_mulv = -0x5555555555555555
 )
 
 const (
@@ -854,7 +847,6 @@ func (self *Assembler) encode_string(doubleQuote bool) {
 
 /** OpCode Assembler Functions **/
 
-// TODO: consider to use getter method replace the simple var(cache) def
 var (
 	_F_f64toa    = jit.Imm(int64(native.S_f64toa))
 	_F_f32toa    = jit.Imm(int64(native.S_f32toa))
@@ -1030,37 +1022,17 @@ func (self *Assembler) _asm_OP_str(_ *ir.Instr) {
 
 func (self *Assembler) _asm_OP_bin(_ *ir.Instr) {
 	self._debug_tag(0x10) // 0x010
-	if _USE_B64ENCODE_GO {
-		self.Emit("MOVD", _RP, _R0)
-		self.Emit("MOVD", _RL, _R1)
-		self.Emit("MOVD", _RC, _R2)
-		self.Emit("MOVD", jit.Ptr(_SP_p, 0), _R3)
-		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _R4)
-		self.Emit("MOVD", jit.Ptr(_SP_p, 16), _R5)
-		self.call_b64(_F_b64encode)
-		self.Emit("MOVD", _R0, _RP)
-		self.Emit("MOVD", _R1, _RL)
-		self.Emit("MOVD", _R2, _RC)
-		self.save_buffer()
-	} else {
-		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _R0) // MOVQ 8(SP.p), AX
-		self.Emit("ADD", jit.Imm(2), _R0)         // ADDQ $2, AX
-		self.Emit("MOVD", jit.Imm(_IM_mulv), _T0) // MOVQ $_MF_mulv, CX
-		self.EmitWithThreeOps("UMULH", _T2, _T0, _R0)
-		self.EmitWithThreeOps("ADD", _R0, _T2, _T2)
-		self.EmitWithThreeOps("ADD", _R0, _R0, jit.Imm(1))
-		self.EmitWithThreeOps("ORR", _R0, _R0, jit.Imm(2))
-		self.check_size_r_auto(_R0)
-		self.add_char('"')                      // CHAR $'"'
-		self.Emit("MOVD", _ARG_rb, _R0)         // MOVQ rb<>+0(FP), DI
-		self.Emit("MOVD", _RL, jit.Ptr(_R0, 8)) // MOVQ SI, 8(DI)
-		self.Emit("MOVD", _SP_p, _R1)           // MOVQ SP.p, SI
-		self.Emit("MOVD", _ZR, _R2)
-		self.call_b64(_F_b64encode) // CALL b64encode
-		self.load_buffer()          // LOAD {buf}
-		self.add_char('"')          // CHAR $'"'
-	}
-	// _AX * _CX = _DX : _AX
+	self.Emit("MOVD", _RP, _R0)
+	self.Emit("MOVD", _RL, _R1)
+	self.Emit("MOVD", _RC, _R2)
+	self.Emit("MOVD", jit.Ptr(_SP_p, 0), _R3)
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _R4)
+	self.Emit("MOVD", jit.Ptr(_SP_p, 16), _R5)
+	self.call_b64(_F_b64encode)
+	self.Emit("MOVD", _R0, _RP)
+	self.Emit("MOVD", _R1, _RL)
+	self.Emit("MOVD", _R2, _RC)
+	self.save_buffer()
 }
 
 func (self *Assembler) _asm_OP_quote(_ *ir.Instr) {
@@ -1136,7 +1108,6 @@ func (self *Assembler) _asm_OP_byte(p *ir.Instr) {
 	self.check_size(1)
 	self.write_imm_to_mem("MOVB", jit.Imm(p.I64()), _RP, _RL, 0, _T0, _T1)
 	self.EmitAdd(_RL, _RL, jit.Imm(1))
-	// TODO: del this statement for performance
 	self.save_buffer()
 }
 

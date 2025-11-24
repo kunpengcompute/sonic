@@ -114,19 +114,18 @@ func (self *BaseAssembler) Link(to string) {
 }
 
 func adr(rm int64, imm int64) int64 {
-	// TODO: check: rm < 32
 	var other int64 = 0x10000000 | rm
-	var immho int64 = imm << 3
-	return adrBuild(other, immho)
+	var immhi int64 = imm << 3
+	return adrBuild(other, immhi)
 }
 
-func adrBuild(other int64, immho int64) int64 {
-	return (other & 0xff00001f) | (immho & 0x00ffffe0)
+func adrBuild(other int64, immhi int64) int64 {
+	return (other & 0xff00001f) | (immhi & 0x00ffffe0)
 }
 
-func adrInv(src int64) (other int64, immho int64) {
+func adrInv(src int64) (other int64, immhi int64) {
 	other = src & 0xff00001f
-	immho = src & 0x00ffffe0
+	immhi = src & 0x00ffffe0
 	return
 }
 
@@ -453,8 +452,8 @@ func (self *BaseAssembler) resolve() {
 			} else {
 				a := prog.To.Offset
 				other, immho_a := adrInv(a)
-				immho := immho_a + ((p.Pc - prog.Pc) << 3)
-				off := adrBuild(other, immho)
+				immhi := immho_a + ((p.Pc - prog.Pc) << 3)
+				off := adrBuild(other, immhi)
 				binary.LittleEndian.PutUint32(self.c[prog.Pc:], uint32(off))
 			}
 		}
