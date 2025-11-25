@@ -1,5 +1,5 @@
-//go:build go1.23 && !go1.26 && !pccol
-// +build go1.23,!go1.26,!pccol
+//go:build go1.23 && !go1.26 && pccol
+// +build go1.23,!go1.26,pccol
 
 /*
  * Copyright 2021 ByteDance Inc.
@@ -88,6 +88,7 @@ type _func struct {
     pcln      uint32
     npcdata   uint32
     cuOffset  uint32 // runtime.cutab offset of this function's CU
+    pccol     uint32 // column number, as companion of line number pcln
     startLine int32  // line number of start of function (func keyword/TEXT directive)
     funcID    uint8 // set for certain special runtime functions
     flag      uint8
@@ -116,3 +117,5 @@ type _func struct {
     //
     // funcdata [nfuncdata]uint32
 }
+
+
