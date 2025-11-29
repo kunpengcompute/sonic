@@ -9,11 +9,11 @@ package sve_linkname
 func __skip_one_fast_entry__() uintptr
 
 var (
-    _subr__skip_one_fast uintptr = __skip_one_fast_entry__() +  160
+    _subr__skip_one_fast uintptr = __skip_one_fast_entry__() +  32
 )
 
 const (
-    _stack__skip_one_fast = 192
+    _stack__skip_one_fast = 160
 )
 
 var (
