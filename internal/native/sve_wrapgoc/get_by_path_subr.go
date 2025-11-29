@@ -12,23 +12,23 @@ const (
 )
 
 const (
-    _stack__get_by_path = 304
+    _stack__get_by_path = 224
 )
 
 const (
-    _size__get_by_path = 19396
+    _size__get_by_path = 18212
 )
 
 var (
     _pcsp__get_by_path = [][2]uint32{
         {0x1, 0},
-        {0x2c, 256},
-        {0x30, 288},
-        {0x3f4c, 304},
-        {0x3f50, 288},
-        {0x3f7c, 256},
-        {0x3f80, 0},
-        {0x4bc4, 304},
+        {0x20, 176},
+        {0x24, 208},
+        {0x3c60, 224},
+        {0x3c64, 208},
+        {0x3c84, 176},
+        {0x3c88, 0},
+        {0x4724, 224},
     }
 )
 
