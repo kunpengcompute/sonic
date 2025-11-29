@@ -11,11 +11,11 @@ package sve_linkname
 func __get_by_path_entry__() uintptr
 
 var (
-	_subr__get_by_path uintptr = __get_by_path_entry__() + 176
+	_subr__get_by_path uintptr = __get_by_path_entry__() +  48
 )
 
 const (
-	_stack__get_by_path = 288
+	_stack__get_by_path = 224
 )
 
 var (

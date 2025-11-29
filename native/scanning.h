@@ -26,6 +26,7 @@
 
 #if defined(__SVE__)
 #include "arm_sve.h"
+#include "arm_neon.h"
 #endif
 
 static always_inline long skip_number_1(const GoString *src, long *p);
@@ -1458,13 +1459,12 @@ static always_inline uint64_t get_maskx64(const char *s, char c) {
     uint32_t m0 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v0, _mm256_set1_epi8(c)));
     uint32_t m1 = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v1, _mm256_set1_epi8(c)));
     return ((uint64_t)(m1) << 32) | (uint64_t)(m0);
-#elif defined(__SVE__)  // ▒▒▒▒֤▒ȼ▒
-    svbool_t pg = svptrue_b8();
-    svuint8_t v0 = svld1_u8(pg, (const uint8_t *)s);
-    svuint8_t v1 = svld1_u8(pg, (const uint8_t *)(s + 32));
-    svbool_t cmp0_pg = svcmpeq_n_u8(pg, v0, c);
+#elif defined(__SVE__) 
+    svuint8_t v0 = svld1_u8(svptrue_b8(), (const uint8_t *)s);
+    svuint8_t v1 = svld1_u8(svptrue_b8(), (const uint8_t *)(s + 32));
+    svbool_t cmp0_pg = svcmpeq_n_u8(svptrue_b8(), v0, c);
     uint32_t *m0 = (uint32_t *)&cmp0_pg;
-    svbool_t cmp1_pg = svcmpeq_n_u8(pg, v1, c);
+    svbool_t cmp1_pg = svcmpeq_n_u8(svptrue_b8(), v1, c);
     uint32_t *m1 = (uint32_t *)&cmp1_pg;
     return (((uint64_t)(*m1) << 32) | (*m0));
 #else
@@ -1499,6 +1499,7 @@ static always_inline uint64_t get_maskx32(const char *s, char c) {
 #endif
 }
 
+
 // get the string (besides in quote) mask
 static always_inline uint64_t get_string_maskx64(const char *s, uint64_t *prev_inquote, uint64_t *prev_bs) {
     uint64_t escaped = *prev_bs;
@@ -1523,7 +1524,16 @@ static always_inline uint64_t get_string_maskx64(const char *s, uint64_t *prev_i
     quote_mask &= ~escaped;
 
     /* get the inquote bitmask */
+
+#if defined(__SVE__)
+    uint64x1_t v1 = vcreate_u64(quote_mask);
+    uint64x1_t v2 = vdup_n_u64('\xFF');
+    poly128_t p = vmull_p64(vreinterpret_p64_u64(v1), vreinterpret_p64_u64(v2));
+    uint64_t inquote = vgetq_lane_p64(vreinterpretq_u64_p128(p), 0);
+#else
     uint64_t inquote = _mm_cvtsi128_si64(_mm_clmulepi64_si128(_mm_set_epi64x(0, quote_mask), _mm_set1_epi8('\xFF'), 0));
+#endif
+
     inquote ^= *prev_inquote;
     *prev_inquote = (uint64_t)(((int64_t)(inquote)) >> 63);
     return inquote;
@@ -1629,9 +1639,11 @@ static always_inline long skip_container_fast(const GoString *src, long *p, char
     size_t lnum = 0, rnum = 0, last_lnum = 0;
     uint64_t inquote = 0;
 
+
     while (likely(nb >= 64)) {
 skip:
         inquote = get_string_maskx64(s, &prev_inquote, &prev_bs);
+
         lbrace = get_maskx64(s, lc) & ~inquote;
         rbrace = get_maskx64(s, rc) & ~inquote;
 
@@ -1655,6 +1667,7 @@ skip:
         }
         lnum = last_lnum + __builtin_popcountll((int64_t)lbrace);
         s += 64, nb -= 64;
+
     }
 
     if (nb <= 0) {
