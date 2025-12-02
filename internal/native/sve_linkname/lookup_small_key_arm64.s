@@ -277,8 +277,7 @@ _lookup_small_key:
 	MOVD table+8(FP), R1
 	MOVD lowerOff+16(FP), R2
 	MOVD ·_subr__lookup_small_key(SB), R11
-	WORD $0x1000005e // adr x30, .+8
-	JMP (R11)
+	BL (R11)
 	MOVD R0, ret+24(FP)
 	RET
 

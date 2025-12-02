@@ -881,8 +881,7 @@ _skip_one_fast:
 	MOVD s+0(FP), R0
 	MOVD p+8(FP), R1
 	MOVD ·_subr__skip_one_fast(SB), R11
-	WORD $0x1000005e // adr x30, .+8
-	JMP (R11)
+	BL (R11)
 	MOVD R0, ret+16(FP)
 	RET
 
