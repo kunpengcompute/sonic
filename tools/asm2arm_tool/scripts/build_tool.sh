@@ -7,6 +7,9 @@ set -e
 
 # 获取脚本所在目录的绝对路径
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/cpu_detect.sh"
+check_kunpeng_cpu
+
 TOOL_DIR="$(dirname "$SCRIPT_DIR")"   # asm2arm_tool
 BUILD_DIR="$TOOL_DIR/build"
 LLVM_DIR="$TOOL_DIR/llvm-project"
@@ -24,7 +27,7 @@ mkdir -p "$BUILD_DIR"
 # 拉取 LLVM 代码
 if [ ! -d "$LLVM_DIR" ]; then
     echo ">>> Cloning LLVM project..."
-    git clone -b feat-goframe-sve --single-branch --depth=1 https://gitcode.com/whoiskk/llvm-project.git "$LLVM_DIR"
+    git clone -b hw_dev --single-branch --depth=1 https://github.com/kitex-contrib/llvm-project.git "$LLVM_DIR"
 else
     echo ">>> LLVM directory already exists, skipping clone."
 fi
