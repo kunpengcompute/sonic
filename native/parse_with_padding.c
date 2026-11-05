@@ -625,6 +625,8 @@ static always_inline long parse_string_inplace(uint8_t** cur, bool* has_esc, uin
 
     // breakpoint();
     while (true) {
+	__builtin_prefetch(*cur+64,0,0);
+	__builtin_prefetch(*cur+128,0,0);
         block = string_block_new(*cur, opts);
         if (has_quote_first(&block)) {
             *cur += trailing_zeros(block.quote) + 1; // skip the quote char
