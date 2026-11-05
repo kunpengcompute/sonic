@@ -83,6 +83,11 @@ static inline uint32_t mask256_tobitmask(mask256 mask) {
     return _mm256_movemask_epi8(mask);
 }
 
+static inline uint32_t mask256_first(mask256 mask) {
+    uint32_t bits = mask256_tobitmask(mask);
+    return bits ? (uint32_t)__builtin_ctz(bits) : 32;
+}
+
 static inline mask256 mask256_and(mask256 mask1, mask256 mask2) {
     return _mm256_and_si256(mask1, mask2);
 }
@@ -122,6 +127,10 @@ static inline v256u v256_splat(uint8_t ch) {
 
 static inline uint32_t mask256_tobitmask(mask256 mask) {
     return *((uint32_t *)&mask);
+}
+
+static inline uint32_t mask256_first(mask256 mask) {
+    return (uint32_t)svcntp_b8(svptrue_b8(), svbrkb_b_z(svptrue_b8(), mask));
 }
 
 static inline mask256 mask256_and(mask256 mask1, mask256 mask2) {
@@ -173,6 +182,11 @@ static uint32_t mask256_tobitmask(mask256 mask) {
     uint32_t lo = mask128_tobitmask(mask.lo);
     uint32_t hi = mask128_tobitmask(mask.hi);
     return lo | (hi << 16);
+}
+
+static inline uint32_t mask256_first(mask256 mask) {
+    uint32_t bits = mask256_tobitmask(mask);
+    return bits ? (uint32_t)__builtin_ctz(bits) : 32;
 }
 
 static inline mask256 mask256_and(mask256 mask1, mask256 mask2) {
