@@ -409,9 +409,9 @@ static always_inline uint64_t get_nonspace_bits(const uint8_t* s) {
     svuint8_t lo = svld1_u8(svptrue_b8(), s);
     svuint8_t hi = svld1_u8(svptrue_b8(), s+32);
 
-    svuint8_t idx_lo = svand_n_u8_z(svptrue_b8(), lo, 0x1F);
+    svuint8_t idx_lo = svand_n_u8_x(pg, lo, 0x1F);
     svuint8_t shuffle_lo = svtbl_u8(space_tab, idx_lo);
-    svuint8_t idx_hi = svand_n_u8_z(svptrue_b8(), hi, 0x1F);
+    svuint8_t idx_hi = svand_n_u8_x(pg, hi, 0x1F);
     svuint8_t shuffle_hi = svtbl_u8(space_tab, idx_hi);
 
     svbool_t lo_res = svcmpeq_u8(svptrue_b8(), lo, shuffle_lo);
