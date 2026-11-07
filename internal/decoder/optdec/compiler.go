@@ -3,6 +3,7 @@ package optdec
 import (
 	"fmt"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/bytedance/sonic/internal/caching"
 	"github.com/bytedance/sonic/internal/rt"
@@ -13,15 +14,34 @@ var (
 	programCache = caching.CreateProgramCache()
 )
 
+// direct-mapped cache to skip programCache probing on the per-Decode entry
+// path; entries are immutable once stored, so racing stores are benign
+const _FastFindSize = 1 << 10
+
+type _FastFindEntry struct {
+	vt  *rt.GoType
+	dec decFunc
+}
+
+var _fastFindTab [_FastFindSize]atomic.Pointer[_FastFindEntry]
+
 func findOrCompile(vt *rt.GoType) (decFunc, error) {
+	slot := &_fastFindTab[vt.Hash&(_FastFindSize-1)]
+	if e := slot.Load(); e != nil && e.vt == vt {
+		return e.dec, nil
+	}
 	makeDecoder := func(vt *rt.GoType, _ ...interface{}) (interface{}, error) {
 		ret, err := newCompiler().compileType(vt.Pack())
 		return ret, err
 	}
 	if val := programCache.Get(vt); val != nil {
-		return val.(decFunc), nil
+		dec := val.(decFunc)
+		slot.Store(&_FastFindEntry{vt: vt, dec: dec})
+		return dec, nil
 	} else if ret, err := programCache.Compute(vt, makeDecoder); err == nil {
-		return ret.(decFunc), nil
+		dec := ret.(decFunc)
+		slot.Store(&_FastFindEntry{vt: vt, dec: dec})
+		return dec, nil
 	} else {
 		return nil, err
 	}
