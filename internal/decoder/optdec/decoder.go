@@ -77,7 +77,9 @@ func Decode(s *string, i *int, f uint64, val interface{}) error {
 	err = dec.FromDom(vp, ctx.Root(), &ctx)
 
 fix_error:
-	err = fix_error(*s, *i, err)
+	if err != nil {
+		err = fix_error(*s, *i, err)
+	}
 
 	// update position at last
 	*i += ctx.Parser.Pos()
