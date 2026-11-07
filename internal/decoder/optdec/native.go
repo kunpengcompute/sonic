@@ -146,7 +146,12 @@ func newParser(data string, pos int, opt uint64) *Parser {
 		p.start = uintptr((*rt.GoString)(unsafe.Pointer(&p.Json)).Ptr)
 	} else {
 		p.Json = data
-		// TODO: prevent too large JSON
+		// Combine data + padding into a single append to avoid two
+		// memmove calls and potential double-growth.
+		need := len(data) - pos + len(padding)
+		if cap(p.padded) < need {
+			p.padded = make([]byte, 0, need)
+		}
 		p.padded = append(p.padded, data[pos:]...)
 		p.padded = append(p.padded, padding...)
 		p.start = uintptr((*rt.GoSlice)(unsafe.Pointer(&p.padded)).Ptr)
