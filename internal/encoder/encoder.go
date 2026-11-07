@@ -222,8 +222,22 @@ func encodeInto(buf *[]byte, val interface{}, opts Options) error {
 	return err
 }
 
+var (
+	htmlEscSeq2028 = []byte{0xe2, 0x80, 0xa8}
+	htmlEscSeq2029 = []byte{0xe2, 0x80, 0xa9}
+)
+
+// needsHTMLEscape reports whether b contains any byte that HTMLEscape would
+// rewrite: '<', '>', '&', U+2028 or U+2029.
+func needsHTMLEscape(b []byte) bool {
+	if bytes.IndexByte(b, '<') >= 0 || bytes.IndexByte(b, '>') >= 0 || bytes.IndexByte(b, '&') >= 0 {
+		return true
+	}
+	return bytes.Contains(b, htmlEscSeq2028) || bytes.Contains(b, htmlEscSeq2029)
+}
+
 func encodeFinish(buf []byte, opts Options) []byte {
-	if opts&EscapeHTML != 0 {
+	if opts&EscapeHTML != 0 && needsHTMLEscape(buf) {
 		buf = HTMLEscape(nil, buf)
 	}
 	if (opts&ValidateString != 0) && !utf8.Validate(buf) {
@@ -233,7 +247,7 @@ func encodeFinish(buf []byte, opts Options) []byte {
 }
 
 func encodeFinishWithPool(buf *[]byte, opts Options) {
-	if opts&EscapeHTML != 0 {
+	if opts&EscapeHTML != 0 && needsHTMLEscape(*buf) {
 		dst := vars.NewBytes()
 		// put the result bytes to buf and the old buf to dst to return to the pool.
 		// we cannot return buf to the pool because it will be used by the caller.
