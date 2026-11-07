@@ -22,18 +22,48 @@ import (
 	"github.com/bytedance/sonic/internal/resolver"
 )
 
-// maxLinearFields is the struct field count under which a contiguous linear
-// scan beats a Go map lookup (measured: N<=6 linear wins, N>=10 map wins).
 const maxLinearFields = 8
 
 type FieldCache struct {
 	caseSensitive   map[string]int
 	caseInsensitive map[string]int
 
-	// linear exact-match table for small structs; nil for large ones.
-	// Built with last-wins semantics to match the map above.
 	linearNames []string
 	linearIdx   []int32
+
+	foldHashes map[uint64]int
+	fieldNames []string
+}
+
+func foldHash(s string) uint64 {
+	const offset uint64 = 14695981039346656037
+	const prime uint64 = 1099511628211
+	h := offset
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		h ^= uint64(c)
+		h *= prime
+	}
+	return h
+}
+
+// hasUpperASCII reports whether s contains at least one byte in 'A'..'Z'.
+// It also returns false (with ok=false) if any byte >= 0x80 is found,
+// signalling the caller to fall back to strings.ToLower.
+func hasUpperASCII(s string) (has bool, ok bool) {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			return true, true
+		}
+		if c >= 0x80 {
+			return false, false
+		}
+	}
+	return false, true
 }
 
 func NewFieldCache(fields []resolver.FieldMeta) *FieldCache {
@@ -56,6 +86,18 @@ func NewFieldCache(fields []resolver.FieldMeta) *FieldCache {
 			f.linearNames[i] = field.Name
 			f.linearIdx[i] = int32(i)
 		}
+	} else if len(fields) > maxLinearFields {
+		f.foldHashes = make(map[uint64]int, len(fields))
+		f.fieldNames = make([]string, len(fields))
+		for i, field := range fields {
+			f.fieldNames[i] = field.Name
+			if _, ok := hasUpperASCII(field.Name); ok {
+				h := foldHash(field.Name)
+				if existing, ok := f.foldHashes[h]; !ok || i < existing {
+					f.foldHashes[h] = i
+				}
+			}
+		}
 	}
 	return f
 }
@@ -71,6 +113,35 @@ func (f *FieldCache) Get(name string, caseSensitive bool) int {
 		if idx, ok := f.caseInsensitive[name]; ok {
 			return idx
 		}
+		// Quick check: does name have uppercase ASCII?
+		// If not, ToLower(name)==name and caseInsensitive already missed → -1.
+		has, ascii := hasUpperASCII(name)
+		if !ascii {
+			// non-ASCII key, fall back to ToLower
+			lower := strings.ToLower(name)
+			if lower == name {
+				return -1
+			}
+			if idx, ok := f.caseInsensitive[lower]; ok {
+				return idx
+			}
+			return -1
+		}
+		if !has {
+			// all-lowercase ASCII, caseInsensitive[name] already missed
+			return -1
+		}
+		// has uppercase ASCII: use fold-hash (no allocation)
+		if f.foldHashes != nil {
+			h := foldHash(name)
+			if idx, ok := f.foldHashes[h]; ok {
+				if strings.EqualFold(f.fieldNames[idx], name) {
+					return idx
+				}
+			}
+			return -1
+		}
+		// foldHashes nil (field names were non-ASCII), use ToLower
 		lower := strings.ToLower(name)
 		if lower == name {
 			return -1
@@ -81,8 +152,7 @@ func (f *FieldCache) Get(name string, caseSensitive bool) int {
 		return -1
 	}
 
-	// small struct: contiguous linear scan (no hashing, no allocation)
-	// backward scan: same last-wins result as map assignment
+	// small struct: contiguous linear scan
 	for i := len(f.linearNames) - 1; i >= 0; i-- {
 		if f.linearNames[i] == name {
 			return int(f.linearIdx[i])
@@ -91,8 +161,6 @@ func (f *FieldCache) Get(name string, caseSensitive bool) int {
 	if caseSensitive {
 		return -1
 	}
-	// case-insensitive: single EqualFold pass (first-wins, matches the
-	// smallest-index semantics of the map below); no ToLower allocation
 	for i := 0; i < len(f.linearNames); i++ {
 		if strings.EqualFold(f.linearNames[i], name) {
 			return int(f.linearIdx[i])
