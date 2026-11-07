@@ -20,6 +20,7 @@
 package arm64
 
 import (
+	"sync/atomic"
 	"unsafe"
 	_ "unsafe"
 
@@ -41,14 +42,35 @@ func ptoenc(p loader.Function) vars.Encoder {
 	return *(*vars.Encoder)(unsafe.Pointer(&p))
 }
 
+// direct-mapped cache to skip programCache probing on the hot per-value
+// dispatch path; entries are immutable once stored, so racing stores are benign
+const _FastDispatchSize = 1 << 10
+
+type _FastDispatchEntry struct {
+	vt *rt.GoType
+	fn vars.Encoder
+}
+
+var _fastDispatch [_FastDispatchSize]atomic.Pointer[_FastDispatchEntry]
+
 func EncodeTypedPointer(buf *[]byte, vt *rt.GoType, vp *unsafe.Pointer, sb *vars.Stack, fv uint64) error {
 	if vt == nil {
 		return prim.EncodeNil(buf)
-	} else if fn, err := vars.FindOrCompile(vt, (fv&(1<<alg.BitPointerValue)) != 0, compiler); err != nil {
-		return err
-	} else if vt.Indirect() {
-		return fn.(vars.Encoder)(buf, *vp, sb, fv)
-	} else {
-		return fn.(vars.Encoder)(buf, unsafe.Pointer(vp), sb, fv)
 	}
+	var fn vars.Encoder
+	slot := &_fastDispatch[vt.Hash&(_FastDispatchSize-1)]
+	if e := slot.Load(); e != nil && e.vt == vt {
+		fn = e.fn
+	} else {
+		ifn, err := vars.FindOrCompile(vt, (fv&(1<<alg.BitPointerValue)) != 0, compiler)
+		if err != nil {
+			return err
+		}
+		fn = ifn.(vars.Encoder)
+		slot.Store(&_FastDispatchEntry{vt: vt, fn: fn})
+	}
+	if vt.Indirect() {
+		return fn(buf, *vp, sb, fv)
+	}
+	return fn(buf, unsafe.Pointer(vp), sb, fv)
 }
