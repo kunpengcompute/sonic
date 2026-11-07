@@ -246,6 +246,18 @@ static always_inline ssize_t advance_string_default(const GoString *src, long p,
         svbool_t q1_pg = svcmpeq_u8(svptrue_b8(), v1, cq);
         svbool_t x0_pg = svcmpeq_u8(svptrue_b8(), v0, cx);
         svbool_t x1_pg = svcmpeq_u8(svptrue_b8(), v1, cx);
+
+        /* fast path: avoid the predicate-to-GPR extraction when this block
+         * has no quote, no backslash and no pending carry (m0 == m1 == 0) */
+        svbool_t any_qx = svorr_b_z(svptrue_b8(),
+            svorr_b_z(svptrue_b8(), q0_pg, q1_pg),
+            svorr_b_z(svptrue_b8(), x0_pg, x1_pg));
+        if (likely(!svptest_any(svptrue_b8(), any_qx) && cr == 0)) {
+            sp += 64;
+            nb -= 64;
+            continue;
+        }
+
         uint32_t *bit7_q0 = (uint32_t *)&q0_pg;
         uint32_t *bit7_q1 = (uint32_t *)&q1_pg;
         uint32_t *bit7_x0 = (uint32_t *)&x0_pg;
@@ -310,6 +322,16 @@ static always_inline ssize_t advance_string_default(const GoString *src, long p,
         v0 = svld1_u8(svptrue_b8(), (uint8_t *)sp);
         svbool_t q0_pg = svcmpeq(svptrue_b8(), v0, cq);
         svbool_t x0_pg = svcmpeq(svptrue_b8(), v0, cx);
+
+        /* fast path: skip the predicate-to-GPR extraction when this block
+         * has no quote, no backslash and no pending carry (m0 == m1 == 0) */
+        svbool_t any_qx = svorr_b_z(svptrue_b8(), q0_pg, x0_pg);
+        if (likely(!svptest_any(svptrue_b8(), any_qx) && cr == 0)) {
+            sp += 32;
+            nb -= 32;
+            goto sve_after32;
+        }
+
         uint32_t *bit7_q0 = (uint32_t *)&q0_pg;
         uint32_t *bit7_x0 = (uint32_t *)&x0_pg;
         m0 = (uint64_t)*bit7_q0;
@@ -349,6 +371,7 @@ static always_inline ssize_t advance_string_default(const GoString *src, long p,
         nb -= 32;
     }
 
+sve_after32:;
     /* check for carry */
     if (unlikely(cr != 0)) {
         if (nb == 0) {
@@ -1629,6 +1652,66 @@ static always_inline long skip_number_fast(const GoString *src, long *p) {
     return vi;
 }
 
+#if defined(__SVE__)
+/* String/brace bookkeeping for one 64-byte block of a container body.
+ *
+ * The block is loaded once and the compares are shared across the four char
+ * masks, instead of re-loading it in every get_maskx64 call. Returns true
+ * when the block has no quote, backslash or brace and no escape is pending,
+ * i.e. when the caller can simply advance (all bookkeeping stays unchanged).
+ *
+ * Otherwise updates *prev_inquote/*prev_bs, and fills *lbrace/*rbrace with
+ * the brace masks outside strings. */
+static always_inline bool get_container_masksx64(const char *s, char lc, char rc,
+        uint64_t *prev_inquote, uint64_t *prev_bs, uint64_t *lbrace, uint64_t *rbrace) {
+    svuint8_t v0 = svld1_u8(svptrue_b8(), (const uint8_t *)(s + 0));
+    svuint8_t v1 = svld1_u8(svptrue_b8(), (const uint8_t *)(s + 32));
+    svbool_t q0_pg = svcmpeq_n_u8(svptrue_b8(), v0, '"');
+    svbool_t q1_pg = svcmpeq_n_u8(svptrue_b8(), v1, '"');
+    svbool_t x0_pg = svcmpeq_n_u8(svptrue_b8(), v0, '\\');
+    svbool_t x1_pg = svcmpeq_n_u8(svptrue_b8(), v1, '\\');
+    svbool_t lb0_pg = svcmpeq_n_u8(svptrue_b8(), v0, (uint8_t)lc);
+    svbool_t lb1_pg = svcmpeq_n_u8(svptrue_b8(), v1, (uint8_t)lc);
+    svbool_t rb0_pg = svcmpeq_n_u8(svptrue_b8(), v0, (uint8_t)rc);
+    svbool_t rb1_pg = svcmpeq_n_u8(svptrue_b8(), v1, (uint8_t)rc);
+    uint64_t quote_mask = ((uint64_t)*(uint32_t *)&q1_pg << 32) | *(uint32_t *)&q0_pg;
+    uint64_t bs_mask = ((uint64_t)*(uint32_t *)&x1_pg << 32) | *(uint32_t *)&x0_pg;
+
+    *lbrace = ((uint64_t)*(uint32_t *)&lb1_pg << 32) | *(uint32_t *)&lb0_pg;
+    *rbrace = ((uint64_t)*(uint32_t *)&rb1_pg << 32) | *(uint32_t *)&rb0_pg;
+    if (likely((quote_mask | bs_mask | *lbrace | *rbrace) == 0 && *prev_bs == 0)) {
+        return true;
+    }
+
+    /* get the escaped bitmask (same logic as get_string_maskx64) */
+    uint64_t escaped = *prev_bs;
+    if (bs_mask || *prev_bs) {
+        bs_mask &= ~*prev_bs;
+        uint64_t follow_bs = (bs_mask << 1) | *prev_bs;
+        uint64_t bs_start = bs_mask & ~follow_bs;
+        uint64_t odd_start = bs_start & ODD_MASK;
+        uint64_t even_or_oc = add64(odd_start, bs_mask, prev_bs);
+        uint64_t even_or_escaped = (even_or_oc << 1) ^ EVEN_MASK;
+        escaped = follow_bs & even_or_escaped;
+    } else {
+        *prev_bs = 0;
+    }
+    quote_mask &= ~escaped;
+
+    /* get the inquote bitmask */
+    uint64x1_t vv1 = vcreate_u64(quote_mask);
+    uint64x1_t vv2 = vdup_n_u64('\xFF');
+    poly128_t pm = vmull_p64(vreinterpret_p64_u64(vv1), vreinterpret_p64_u64(vv2));
+    uint64_t inquote = vgetq_lane_p64(vreinterpretq_u64_p128(pm), 0);
+    inquote ^= *prev_inquote;
+    *prev_inquote = (uint64_t)(((int64_t)(inquote)) >> 63);
+
+    *lbrace &= ~inquote;
+    *rbrace &= ~inquote;
+    return false;
+}
+#endif
+
 static always_inline long skip_container_fast(const GoString *src, long *p, char lc, char rc) {
     long nb = src->len - *p;
     const char *s = src->buf + *p;
@@ -1637,15 +1720,23 @@ static always_inline long skip_container_fast(const GoString *src, long *p, char
     uint64_t prev_inquote = 0, prev_bs = 0;
     uint64_t lbrace = 0, rbrace = 0;
     size_t lnum = 0, rnum = 0, last_lnum = 0;
-    uint64_t inquote = 0;
 
 
     while (likely(nb >= 64)) {
-skip:
-        inquote = get_string_maskx64(s, &prev_inquote, &prev_bs);
+skip:;
+#if defined(__SVE__)
+        if (likely(get_container_masksx64(s, lc, rc,
+                                          &prev_inquote, &prev_bs, &lbrace, &rbrace))) {
+            s += 64;
+            nb -= 64;
+            continue;
+        }
+#else
+        uint64_t inquote = get_string_maskx64(s, &prev_inquote, &prev_bs);
 
         lbrace = get_maskx64(s, lc) & ~inquote;
         rbrace = get_maskx64(s, rc) & ~inquote;
+#endif
 
         /* traverse each right brace */
         last_lnum = lnum;
@@ -1851,6 +1942,30 @@ static always_inline long match_key(const GoString *src, long *p, const GoString
     static const long not_match = 0;
     int64_t v = -1;
     long si = *p;
+
+    /* fast path: find the first '"' or '\\' with brkb+cntp (no
+     * predicate-to-GPR extraction). When it is a quote, the key is plain and
+     * really ends there, so both the match test and the end position are
+     * known without the full advance_string_default scan; keys that contain
+     * escapes (raw length differs from the decoded length) or are longer
+     * than one SVE vector fall back to it. */
+#if defined(__SVE__)
+    if (likely(si + 32 <= src->len)) {
+        const char *kb = src->buf + si;
+        svuint8_t kv = svld1_u8(svptrue_b8(), (const uint8_t *)kb);
+        svbool_t sp = svorr_b_z(svptrue_b8(),
+            svcmpeq_n_u8(svptrue_b8(), kv, '"'),
+            svcmpeq_n_u8(svptrue_b8(), kv, '\\'));
+        uint64_t fs = svcntp_b8(svptrue_b8(), svbrkb_b_z(svptrue_b8(), sp));
+        if (likely(fs < 32 && kb[fs] == '"')) {
+            bool eq = (fs == (uint64_t)key.len)
+                   && (key.len == 0 || xmemcmpeq(kb, key.buf, key.len));
+            *p = si + fs + 1;
+            return eq;
+        }
+    }
+#endif
+
     long se = advance_string_default(src, *p, &v);
     if (unlikely(se < 0)) {
         *p = src->len;
