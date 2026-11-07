@@ -12,6 +12,7 @@ import (
 type fieldEntry struct {
 	resolver.FieldMeta
 	fieldDec decFunc
+	offset   uintptr
 }
 
 type structDecoder struct {
@@ -33,13 +34,15 @@ func (d *structDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) erro
 	}
 
 	next := obj.Children()
-	for i := 0; i < obj.Len(); i++ {
+	size := obj.Len()
+	caseSensitive := ctx.Options()&uint64(consts.OptionCaseSensitive) != 0
+	for i := 0; i < size; i++ {
 		key, _ := NewNode(next).AsStrRef(ctx)
 		val := NewNode(PtrOffset(next, 1))
 		next = val.Next()
 
 		// find field idx
-		idx := d.fieldMap.Get(key, ctx.Options()&uint64(consts.OptionCaseSensitive) != 0)
+		idx := d.fieldMap.Get(key, caseSensitive)
 		if idx == -1 {
 			if Options(ctx.Options())&OptionDisableUnknown != 0 {
 				return error_field(key)
@@ -47,8 +50,7 @@ func (d *structDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) erro
 			continue
 		}
 
-		offset := d.fields[idx].Path[0].Size
-		elem := unsafe.Pointer(uintptr(vp) + offset)
+		elem := unsafe.Pointer(uintptr(vp) + d.fields[idx].offset)
 		err := d.fields[idx].fieldDec.FromDom(elem, val, ctx)
 
 		// deal with mismatch type errors

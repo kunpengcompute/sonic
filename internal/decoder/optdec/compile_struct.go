@@ -166,6 +166,7 @@ func (c *compiler) compileStructBody(vt reflect.Type) decFunc {
 		entries = append(entries, fieldEntry{
 			FieldMeta: f,
 			fieldDec:  dec,
+			offset:    f.Path[0].Size,
 		})
 	}
 	return &structDecoder{

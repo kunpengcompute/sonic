@@ -28,12 +28,13 @@ func (d *sliceDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) error
 		return error_mismatch(node, ctx, d.typ)
 	}
 
-	slice := rt.MakeSlice(vp, d.elemType, arr.Len())
+	size := arr.Len()
+	slice := rt.MakeSlice(vp, d.elemType, size)
 	elems := slice.Ptr
 	next := arr.Children()
 
 	var gerr error
-	for i := 0; i < arr.Len(); i++ {
+	for i := 0; i < size; i++ {
 		val := NewNode(next)
 		elem := unsafe.Pointer(uintptr(elems) + uintptr(i)*d.elemType.Size)
 		err := d.elemDec.FromDom(elem, val, ctx)
@@ -67,9 +68,10 @@ func (d *arrayDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) error
 
 	next := arr.Children()
 	i := 0
+	arrLen := arr.Len()
 
 	var gerr error
-	for ; i < d.len && i < arr.Len(); i++ {
+	for ; i < d.len && i < arrLen; i++ {
 		elem := unsafe.Pointer(uintptr(vp) + uintptr(i)*d.elemType.Size)
 		val := NewNode(next)
 		err := d.elemDec.FromDom(elem, val, ctx)
