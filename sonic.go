@@ -41,6 +41,20 @@ type frozenConfig struct {
 
 // Froze convert the Config to API
 func (cfg Config) Froze() API {
+	// Cache: Config is a pure-bool struct (comparable). The same Config
+	// is passed by ajson.API()/jsonx.API() on every Get/Unmarshal/Marshal
+	// call in production; caching avoids a heap allocation per call.
+	if v, ok := frozeCache.Load(cfg); ok {
+		return v.(API)
+	}
+	api := cfg.frozeUncached()
+	frozeCache.Store(cfg, api)
+	return api
+}
+
+var frozeCache sync.Map
+
+func (cfg Config) frozeUncached() API {
 	api := &frozenConfig{Config: cfg}
 
 	// configure encoder options:
