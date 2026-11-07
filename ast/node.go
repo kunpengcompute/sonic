@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	optdec "github.com/bytedance/sonic/internal/decoder/optdec"
 	"github.com/bytedance/sonic/internal/native/types"
 	"github.com/bytedance/sonic/internal/rt"
 )
@@ -1319,10 +1320,39 @@ func (self *Node) unsafeArray() (*linkedNodes, error) {
 	return (*linkedNodes)(self.p), nil
 }
 
+// fastGeneric decodes the raw json text of a container node directly into a
+// generic value via the optdec fast path, bypassing the intermediate Node
+// tree (which Interface() discards anyway). ok=false when the node is not a
+// raw container or the text fails to decode, letting the caller fall back to
+// its canonical (error-exact) path.
+func (self *Node) fastGeneric(useNumber bool) (interface{}, bool) {
+	if self == nil {
+		return nil, false
+	}
+	t := self.loadt()
+	if t&_V_RAW == 0 {
+		return nil, false
+	}
+	if base := t & _MASK_RAW; base != types.V_OBJECT && base != types.V_ARRAY {
+		return nil, false
+	}
+	if v, ok := optdec.DecodeGeneric(rt.StrFrom(self.p, int64(self.l)), useNumber); ok {
+		return v, true
+	}
+	return nil, false
+}
+
 // Interface loads all children under all paths from this node,
 // and converts itself as generic type.
 // WARN: all numeric nodes are cast to float64
 func (self *Node) Interface() (interface{}, error) {
+	// fast path: a raw container node is decoded directly into the generic
+	// value, skipping the intermediate Node tree (which this API discards).
+	// On any decode error, fall through to the canonical path so that error
+	// semantics stay exactly the same.
+	if v, ok := self.fastGeneric(false); ok {
+		return v, nil
+	}
 	if err := self.checkRaw(); err != nil {
 		return nil, err
 	}
@@ -1378,6 +1408,9 @@ func (self *Node) packAny() interface{} {
 // InterfaceUseNumber works same with Interface()
 // except numeric nodes are cast to json.Number
 func (self *Node) InterfaceUseNumber() (interface{}, error) {
+	if v, ok := self.fastGeneric(true); ok {
+		return v, nil
+	}
 	if err := self.checkRaw(); err != nil {
 		return nil, err
 	}
