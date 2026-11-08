@@ -171,6 +171,7 @@ func (c *compiler) compileStructBody(vt reflect.Type) decFunc {
 	return &structDecoder{
 		fieldMap:   caching.NewFieldCache(fv),
 		fields:     entries,
+		slots:      makeSlots(entries),
 		structName: vt.Name(),
 		typ:        vt,
 	}

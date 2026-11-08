@@ -14,11 +14,30 @@ type fieldEntry struct {
 	fieldDec decFunc
 }
 
+// fieldSlot is the hot-loop view of a struct field: only the members touched
+// by FromDom, kept contiguous to skip the FieldMeta indirections
+// (fields[idx].Path[0].Size goes through two slice headers on every access,
+// and FieldMeta is embedded at a non-zero offset inside fieldEntry).
+type fieldSlot struct {
+	dec    decFunc
+	offset uintptr // Path[0].Size, precomputed
+}
+
 type structDecoder struct {
 	fieldMap   *caching.FieldCache
 	fields     []fieldEntry
+	slots      []fieldSlot // flattened per-field hot data
 	structName string
 	typ        reflect.Type
+}
+
+func makeSlots(fields []fieldEntry) []fieldSlot {
+	s := make([]fieldSlot, len(fields))
+	for i := range fields {
+		s[i].dec = fields[i].fieldDec
+		s[i].offset = fields[i].Path[0].Size
+	}
+	return s
 }
 
 func (d *structDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) error {
@@ -32,8 +51,10 @@ func (d *structDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) erro
 		return error_mismatch(node, ctx, d.typ)
 	}
 
+	slots := d.slots
+
 	next := obj.Children()
-	for i := 0; i < obj.Len(); i++ {
+	for i, n := 0, obj.Len(); i < n; i++ {
 		key, _ := NewNode(next).AsStrRef(ctx)
 		val := NewNode(PtrOffset(next, 1))
 		next = val.Next()
@@ -47,9 +68,9 @@ func (d *structDecoder) FromDom(vp unsafe.Pointer, node Node, ctx *context) erro
 			continue
 		}
 
-		offset := d.fields[idx].Path[0].Size
-		elem := unsafe.Pointer(uintptr(vp) + offset)
-		err := d.fields[idx].fieldDec.FromDom(elem, val, ctx)
+		slot := &slots[idx]
+		elem := unsafe.Pointer(uintptr(vp) + slot.offset)
+		err := slot.dec.FromDom(elem, val, ctx)
 
 		// deal with mismatch type errors
 		if gerr == nil && err != nil {
