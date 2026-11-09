@@ -11,7 +11,7 @@ package sve_linkname
 func __get_by_path_entry__() uintptr
 
 var (
-	_subr__get_by_path uintptr = __get_by_path_entry__() + 48
+	_subr__get_by_path uintptr = __get_by_path_entry__() + 48 + 16 // +16B nop block in the asm stub, see get_by_path_arm64.s
 )
 
 const (
