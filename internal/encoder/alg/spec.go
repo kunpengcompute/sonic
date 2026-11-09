@@ -61,12 +61,36 @@ func Valid(data []byte) (ok bool, start int) {
 
 var typeByte = rt.UnpackEface(byte(0)).Type
 
+// noEscapeNeeded returns true if the string contains no characters that
+// require JSON escaping (no `"`, `\`, or control chars 0x00-0x1f).
+// This is the fast path for common ASCII strings (keys, numbers, etc).
+//
+//go:nosplit
+func noEscapeNeeded(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == '"' || c == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
 func Quote(buf []byte, val string, double bool) []byte {
 	if len(val) == 0 {
 		if double {
 			return append(buf, `"\"\""`...)
 		}
 		return append(buf, `""`...)
+	}
+
+	// Fast path: if the string contains no characters that need escaping,
+	// skip the native.Quote call entirely.
+	if !double && noEscapeNeeded(val) {
+		buf = append(buf, '"')
+		buf = append(buf, val...)
+		buf = append(buf, '"')
+		return buf
 	}
 
 	if double {
