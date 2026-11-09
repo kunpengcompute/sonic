@@ -101,7 +101,7 @@ func Quote(buf []byte, val string, double bool) []byte {
 	sp := rt.IndexChar(val, 0)
 	nb := len(val)
 
-	buf = rt.GuardSlice2(buf, nb+1)
+	buf = rt.GuardSlice2(buf, nb*3/2+2)
 	b := (*rt.GoSlice)(unsafe.Pointer(&buf))
 
 	// input buffer
