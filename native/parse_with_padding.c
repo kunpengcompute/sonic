@@ -443,9 +443,9 @@ static always_inline uint64_t get_nonspace_bits(const uint8_t* s) {
 }
 
 static always_inline char skip_space_impl(nonspace_block* slf, reader* rdr) {
-    // fast path 1: check at most two spaces for compat JSON or 
+    // fast path 1: check at most four spaces for compat JSON or 
     // some cases in pretty JSON(such as ` "name": "balabala" `)
-    repeat_2(
+    repeat_4(
         char c = rdr->next(rdr->ctx);
         if (likely(!is_space(c))) {
             return c;

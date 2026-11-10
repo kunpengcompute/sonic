@@ -580,7 +580,12 @@ static always_inline void unirep(char **dp) {
 
 static always_inline char unhex16_is(const char *s) {
     uint32_t v = *(uint32_t *)s;
-    return !(hasless(v, '0') || hasmore(v, 'f') || hasbetween(v, '9', 'A') || hasbetween(v, 'F', 'a'));
+    /* Fold 'A'-'F' into 'a'-'f' with | 0x20 and validate against
+     * ['0'-'9'] U ['a'-'f']. The fold is only safe because hasless(v, '0')
+     * below rejects every byte below '0' first, including the 0x10-0x19
+     * control bytes that would otherwise fold onto '0'-'9'. */
+    uint32_t u = v | 0x20202020;
+    return !(hasless(v, '0') || hasmore(u, 'f') || hasbetween(u, '9', 'a'));
 }
 
 static always_inline uint32_t unhex16_fast(const char *s) {
