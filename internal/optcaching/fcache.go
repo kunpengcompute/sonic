@@ -28,6 +28,7 @@ type entry struct {
 	low  string // build-time folded name (comparison basis of the fold scan)
 	f8   uint64 // first 8 bytes (exact key)
 	l8   uint64 // last 8 bytes (exact key, valid for len >= 8)
+	h    uint64 // foldHash(low), gate for the fold scan
 	idx  int32  // returned on exact match (last-wins on duplicates)
 	lo   int32  // returned on fold match (minimum idx of the same fold class)
 }
@@ -66,7 +67,7 @@ func NewFieldCache(fields []resolver.FieldMeta) *FieldCache {
 			c.buckets[n][j].idx = int32(i)
 			continue
 		}
-		e := entry{name: f.Name, low: lo, idx: int32(i)}
+		e := entry{name: f.Name, low: lo, h: foldHash(lo), idx: int32(i)}
 		if n >= 8 {
 			e.f8, e.l8 = load64(f.Name), loadLast64(f.Name)
 		}
@@ -118,12 +119,57 @@ func (c *FieldCache) Get(name string, caseSensitive bool) int {
 	if caseSensitive {
 		return -1
 	}
+	// all-lowercase pure ASCII: fold match reduces to exact string match,
+	// skipping both the fold-hash computation and the per-entry equalFold scan
+	if has, ascii := hasUpperASCII(name); ascii && !has {
+		for i := range b {
+			if b[i].low == name {
+				return int(b[i].lo)
+			}
+		}
+		return -1
+	}
+	// fold-hash gate: one O(len) hash vs a per-entry byte-wise equalFold scan
+	fh := foldHash(name)
 	for i := range b {
-		if equalFold(b[i].low, name) {
+		if b[i].h == fh && equalFold(b[i].low, name) {
 			return int(b[i].lo)
 		}
 	}
 	return -1
+}
+
+// foldHash computes the case-folded (ASCII A-Z → a-z) FNV-1a hash of s.
+// Used as a cheap integer gate before the per-entry equalFold scan.
+func foldHash(s string) uint64 {
+	const (
+		offset64 uint64 = 14695981039346656037
+		prime64  uint64 = 1099511628211
+	)
+	h := offset64
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		h ^= uint64(c)
+		h *= prime64
+	}
+	return h
+}
+
+// hasUpperASCII reports (hasUppercase, isPureASCII) for s.
+func hasUpperASCII(s string) (has bool, ok bool) {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			return true, true
+		}
+		if c >= 0x80 {
+			return false, false
+		}
+	}
+	return false, true
 }
 
 // equalFold reports whether low and s are ASCII case-insensitively equal.
