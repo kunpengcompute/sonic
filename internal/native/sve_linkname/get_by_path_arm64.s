@@ -27,6 +27,10 @@ LCPI0_2:
     WORD $0x00000000
     WORD $0x00000000
 get_by_path:
+    WORD $0xd503201f  // nop x4: keep 16B offset so the SVE hot loop lands in its fast alignment slot
+    WORD $0xd503201f
+    WORD $0xd503201f
+    WORD $0xd503201f
     WORD $0xd102c3ff  // 	sub	sp, sp, #176
     WORD $0xa904fbfd  // 	stp	fp, lr, [sp, #72]
     WORD $0x910123e9  // 	add	x9, sp, #72

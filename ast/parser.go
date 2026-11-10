@@ -311,6 +311,12 @@ func (self *Parser) Pos() int {
 // NOTICE: the specific parsing lazy dependens parser's option
 // It only parse first layer and first child for Object or Array be default
 func (self *Parser) Parse() (Node, types.ParsingError) {
+	/* fast path: container-level native tree parse (native builds only) */
+	if eagerTreeParse != nil {
+		if n, e, ok := eagerTreeParse(self); ok {
+			return n, e
+		}
+	}
 	switch val := self.decodeValue(); val.Vt {
 	case types.V_EOF:
 		return Node{}, types.ERR_EOF

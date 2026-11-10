@@ -314,6 +314,7 @@ var _OpFuncTab = [256]func(*Assembler, *ir.Instr){
 	ir.OP_quote:          (*Assembler)._asm_OP_quote,
 	ir.OP_number:         (*Assembler)._asm_OP_number,
 	ir.OP_eface:          (*Assembler)._asm_OP_eface,
+	ir.OP_eface_fast:     (*Assembler)._asm_OP_eface_fast,
 	ir.OP_iface:          (*Assembler)._asm_OP_iface,
 	ir.OP_byte:           (*Assembler)._asm_OP_byte,
 	ir.OP_text:           (*Assembler)._asm_OP_text,
@@ -742,10 +743,23 @@ func (self *Assembler) go_panic() {
 	self.call_go(_F_panic)
 }
 
-func (self *Assembler) encode_string(doubleQuote bool) {
-	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T2)
+// encode_string emits the quoted string encoder for the header at base+8/base.
+// With `indirect` set, the string is boxed: the header pointer is re-fetched
+// from (SP.p)+8 on every read, so no register survives the quoter calls.
+func (self *Assembler) encode_string(doubleQuote bool, base obj.Addr, indirect bool) {
+	if indirect {
+		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T1) // boxed: data word -> header ptr
+		self.Emit("MOVD", jit.Ptr(_T1, 8), _T2)   // header: len
+	} else {
+		self.Emit("MOVD", jit.Ptr(base, 8), _T2)
+	}
 	self.EmitCbzS("CBZ", _T2, "_str_empty_{n}")
-	self.Emit("MOVD", jit.Ptr(_SP_p, 0), _T0)
+	if indirect {
+		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T1)
+		self.Emit("MOVD", jit.Ptr(_T1, 0), _T0) // header: data ptr
+	} else {
+		self.Emit("MOVD", jit.Ptr(base, 0), _T0)
+	}
 	self.EmitCbzS("CBNZ", _T0, "_str_next_{n}")
 	self.Emit("MOVD", jit.Imm(int64(vars.PanicNilPointerOfNonEmptyString)), _R0)
 	self.Sjmp("B", _LB_panic)
@@ -781,8 +795,14 @@ func (self *Assembler) encode_string(doubleQuote bool) {
 
 	self.Emit("MOVD", _VAR_sp, _T2)
 
-	self.Emit("MOVD", jit.Ptr(_SP_p, 0), _R0)
-	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _R1)
+	if indirect {
+		self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T1) // boxed: re-fetch header ptr
+		self.Emit("MOVD", jit.Ptr(_T1, 0), _R0)
+		self.Emit("MOVD", jit.Ptr(_T1, 8), _R1)
+	} else {
+		self.Emit("MOVD", jit.Ptr(base, 0), _R0)
+		self.Emit("MOVD", jit.Ptr(base, 8), _R1)
+	}
 	self.EmitAdd(_R0, _R0, _T2)
 	self.Emit("SUB", _T2, _R1)
 
@@ -1017,7 +1037,7 @@ func (self *Assembler) _asm_OP_f64(_ *ir.Instr) {
 
 func (self *Assembler) _asm_OP_str(_ *ir.Instr) {
 	self._debug_tag(0x0f) // 0x00f
-	self.encode_string(false)
+	self.encode_string(false, _SP_p, false)
 }
 
 func (self *Assembler) _asm_OP_bin(_ *ir.Instr) {
@@ -1037,7 +1057,7 @@ func (self *Assembler) _asm_OP_bin(_ *ir.Instr) {
 
 func (self *Assembler) _asm_OP_quote(_ *ir.Instr) {
 	self._debug_tag(0x11) // 0x011
-	self.encode_string(true)
+	self.encode_string(true, _SP_p, false)
 }
 
 func (self *Assembler) _asm_OP_number(_ *ir.Instr) {
@@ -1089,6 +1109,138 @@ func (self *Assembler) _asm_OP_eface(_ *ir.Instr) {
 	self.call_encoder(_F_encodeTypedPointer)  // CALL  encodeTypedPointer
 	self.EmitCbzS("CBNZ", _ET, _LB_error)     // TESTQ ET, ET; JNZ   _error
 	self.load_buffer()
+}
+
+// eface_int encodes a boxed 8-byte integer/unsigned value: the data word at
+// (SP.p)+8 points to the value storage and is dereferenced first. The slot is
+// never written and no register is rebased, keeping the fast path correct
+// under async-GC preemption.
+func (self *Assembler) eface_int(nd int, fn obj.Addr, ins string) {
+	self.check_size(nd)
+	self.save_c()
+	self.rbuf_di()
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0)
+	self.Emit(ins, jit.Ptr(_T0, 0), _R1)
+	self.call_c(fn)
+	self.EmitAdd(_RL, _R0, _RL)
+}
+
+// eface_bool encodes a boxed bool, dereferencing the boxed data word first.
+func (self *Assembler) eface_bool() {
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0)
+	self.Emit("MOVB", jit.Ptr(_T0, 0), _T0)
+	self.EmitCbzS("CBZ", _T0, "_eface_false_{n}")
+	self.check_size(4)
+	self.Emit("MOVD", jit.Imm(_IM_true), _T0)
+	self.Emit("MOVW", _T0, jit.Sib(_RP, _RL, 1, 0))
+	self.Emit("ADD", jit.Imm(4), _RL)
+	self.Sjmp("B", "_eface_bool_end_{n}")
+	self.Link("_eface_false_{n}")
+	self.check_size(5)
+	self.Emit("MOVD", jit.Imm(_IM_fals), _T0)
+	self.Emit("MOVW", _T0, jit.Sib(_RP, _RL, 1, 0))
+	self.EmitAdd(_RL, _RL, jit.Imm(4))
+	self.Emit("MOVD", jit.Imm('e'), _T0)
+	self.Emit("MOVB", _T0, jit.Sib(_RP, _RL, 1, 0))
+	self.EmitAdd(_RL, _RL, jit.Imm(1))
+	self.Link("_eface_bool_end_{n}")
+}
+
+// eface_f64 encodes a boxed float64 through its boxed data pointer, mirroring
+// _asm_OP_f64.
+func (self *Assembler) eface_f64() {
+	self.check_size(32)
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0) // boxed data word -> value ptr
+	self.Emit("MOVD", jit.Ptr(_T0, 0), _T0)   // value bits
+	self.Emit("MOVD", jit.Imm(_FM_exp64), _T1)
+	self.Emit("AND", _T1, _T0)
+	self.Emit("EOR", _T1, _T0)
+	self.EmitCbzS("CBNZ", _T0, "_eface_f64_normal_{n}")
+	self.EmitTbzSLdriPtr(jit.Ptr, "TBZ", jit.Imm(alg.BitEncodeNullForInfOrNan), _ARG_fv, _LB_error_nan_or_infinite, _T2)
+	self._asm_OP_null(nil)
+	self.Sjmp("JMP", "_eface_f64_end_{n}")
+	self.Link("_eface_f64_normal_{n}")
+	self.save_c()
+	self.rbuf_di()
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0)
+	self.Emit("FMOVD", jit.Ptr(_T0, 0), _F0)
+	self.call_c(_F_f64toa)
+	self.Emit("ADD", _R0, _RL)
+	self.Link("_eface_f64_end_{n}")
+}
+
+// eface_f32 encodes a boxed float32 through its boxed data pointer, mirroring
+// _asm_OP_f32.
+func (self *Assembler) eface_f32() {
+	self.check_size(32)
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0) // boxed data word -> value ptr
+	self.Emit("MOVW", jit.Ptr(_T0, 0), _T0)   // value bits (low 32)
+	self.Emit("AND", jit.Imm(_FM_exp32), _T0)
+	self.Emit("EOR", jit.Imm(_FM_exp32), _T0)
+	self.EmitCbzS("CBNZ", _T0, "_eface_f32_normal_{n}")
+	self.EmitTbzSLdriPtr(jit.Ptr, "TBZ", jit.Imm(alg.BitEncodeNullForInfOrNan), _ARG_fv, _LB_error_nan_or_infinite, _T1)
+	self._asm_OP_null(nil)
+	self.Sjmp("JMP", "_eface_f32_end_{n}")
+	self.Link("_eface_f32_normal_{n}")
+	self.save_c()
+	self.rbuf_di()
+	self.Emit("MOVD", jit.Ptr(_SP_p, 8), _T0)
+	self.Emit("FMOVS", jit.Ptr(_T0, 0), _F0)
+	self.call_c(_F_f32toa)
+	self.Emit("ADD", _R0, _RL)
+	self.Link("_eface_f32_end_{n}")
+}
+
+// efaceKindOf maps the static type of an OP_eface_fast instruction to its
+// inline-encoding kind. The chain only ever contains the efaceFastTypes set.
+func efaceKindOf(t reflect.Type) int {
+	switch t.Kind() {
+	case reflect.String:
+		return ir.EfaceKindStr
+	case reflect.Bool:
+		return ir.EfaceKindBool
+	case reflect.Float64:
+		return ir.EfaceKindF64
+	case reflect.Float32:
+		return ir.EfaceKindF32
+	case reflect.Int, reflect.Int64:
+		return ir.EfaceKindI64
+	case reflect.Uint, reflect.Uint64:
+		return ir.EfaceKindU64
+	}
+	panic("unexpected eface fast type: " + t.String())
+}
+
+// _asm_OP_eface_fast inline-encodes a boxed leaf value without the
+// encodeTypedPointer call chain. The slot may point into unowned memory
+// (struct fields), so it is never written. On a match execution jumps to the
+// IR PC in `u` (right after the chain's fallback OP_eface); on a mismatch it
+// falls through to the next case.
+func (self *Assembler) _asm_OP_eface_fast(p *ir.Instr) {
+	kind := efaceKindOf(p.Vt())
+	self.Emit("MOVD", jit.Ptr(_SP_p, 0), _T0)     // eface type word
+	self.Emit("MOVD", jit.Gtype(p.GoType()), _T1) // static type address
+	self.EmitCmpq(_T1, _T0)                       // CMP  type, static_type
+	self.Sjmp("BNE", "_eface_fast_next_{n}")      // BNE  not our type
+
+	switch kind {
+	case ir.EfaceKindStr:
+		self.encode_string(false, _SP_p, true)
+	case ir.EfaceKindBool:
+		self.eface_bool()
+	case ir.EfaceKindI64:
+		self.eface_int(21, _F_i64toa, "MOVD")
+	case ir.EfaceKindU64:
+		self.eface_int(20, _F_u64toa, "MOVD")
+	case ir.EfaceKindF64:
+		self.eface_f64()
+	case ir.EfaceKindF32:
+		self.eface_f32()
+	}
+
+	// matched: value encoded — skip remaining cases and the fallback
+	self.Xjmp("JMP", p.Vi())
+	self.Link("_eface_fast_next_{n}")
 }
 
 func (self *Assembler) _asm_OP_iface(_ *ir.Instr) {
@@ -1287,9 +1439,9 @@ func (self *Assembler) _asm_OP_map_write_key(p *ir.Instr) {
 	self._debug_tag(0x2c) // 0x02c
 	self.Emit("MOVD", _ARG_fv, _T0)
 	self.EmitTbzS("TBZ", jit.Imm(alg.BitSortMapKeys), _T0, "_unordered_key_{n}")
-	self.encode_string(false)       // STR $false
-	self.Xjmp("B", p.Vi())          // JMP ${p.Vi()}
-	self.Link("_unordered_key_{n}") // _unordered_key_{n}:
+	self.encode_string(false, _SP_p, false) // STR $false
+	self.Xjmp("B", p.Vi())                  // JMP ${p.Vi()}
+	self.Link("_unordered_key_{n}")         // _unordered_key_{n}:
 }
 
 func (self *Assembler) _asm_OP_map_value_next(_ *ir.Instr) {

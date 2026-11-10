@@ -83,6 +83,7 @@ const (
 	OP_cond_testc
 	OP_unsupported
 	OP_is_zero
+	OP_eface_fast
 )
 
 const (
@@ -145,6 +146,7 @@ var OpNames = [256]string{
 	OP_cond_set:       "cond_set",
 	OP_cond_testc:     "cond_testc",
 	OP_unsupported:    "unsupported type",
+	OP_eface_fast:     "eface_fast",
 }
 
 func (self Op) String() string {
@@ -154,6 +156,16 @@ func (self Op) String() string {
 		return "<invalid>"
 	}
 }
+
+/* eface fast-path value kinds, consumed by the arch assembler (arm64 only) */
+const (
+	EfaceKindStr  = 0
+	EfaceKindBool = 1
+	EfaceKindI64  = 2
+	EfaceKindU64  = 3
+	EfaceKindF64  = 4
+	EfaceKindF32  = 5
+)
 
 func OP_int() Op {
 	switch _INT_SIZE {
@@ -426,6 +438,12 @@ func (self Program) Tag(n int) {
 func (self Program) Pin(i int) {
 	v := &self[i]
 	v.u = self.PC()
+}
+
+// SetVi overwrites the value field of the instruction at index i (used to
+// carry the eface fast-path kind).
+func (self Program) SetVi(i, vi int) {
+	self[i].u = vi
 }
 
 func (self Program) Rel(v []int) {

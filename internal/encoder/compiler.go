@@ -17,7 +17,9 @@
 package encoder
 
 import (
+	"os"
 	"reflect"
+	"runtime"
 	"unsafe"
 
 	"github.com/bytedance/sonic/internal/encoder/ir"
@@ -673,7 +675,13 @@ func (self *Compiler) compileStructFieldQuoted(p *ir.Program, sp int, vt reflect
 func (self *Compiler) compileInterface(p *ir.Program, vt reflect.Type) {
 	/* iface and efaces are different */
 	if vt.NumMethod() == 0 {
-		p.Add(ir.OP_eface)
+		if useEfaceFast {
+			// arm64 fast path: boxed leaf values are encoded inline, with the
+			// generic OP_eface kept as the chain's fallback.
+			self.compileNil(p, 0, vt, ir.OP_null, self.compileEfaceFast)
+		} else {
+			p.Add(ir.OP_eface)
+		}
 		return
 	}
 
@@ -687,6 +695,45 @@ func (self *Compiler) compileInterface(p *ir.Program, vt reflect.Type) {
 	p.Pin(x)
 	p.Add(ir.OP_null)
 	p.Pin(e)
+}
+
+// efaceFastTypes lists the concrete boxed types the JIT encodes inline. Small
+// integers are excluded: their boxed words need sign/zero extension the
+// inline path does not do.
+var efaceFastTypes = []struct {
+	t reflect.Type
+	k int
+}{
+	{reflect.TypeOf(""), ir.EfaceKindStr},
+	{reflect.TypeOf(false), ir.EfaceKindBool},
+	{reflect.TypeOf(int(0)), ir.EfaceKindI64},
+	{reflect.TypeOf(int64(0)), ir.EfaceKindI64},
+	{reflect.TypeOf(uint(0)), ir.EfaceKindU64},
+	{reflect.TypeOf(uint64(0)), ir.EfaceKindU64},
+	{reflect.TypeOf(float64(0)), ir.EfaceKindF64},
+	{reflect.TypeOf(float32(0)), ir.EfaceKindF32},
+}
+
+// useEfaceFast enables the inline eface dispatch chain on arm64: JIT mode
+// only (the VM interpreter has no OP_eface_fast), default on, and disabled
+// with SONIC_NO_EFACE_FAST=1 — the compiler then emits the plain OP_eface,
+// byte-identical to upstream.
+var useEfaceFast = runtime.GOARCH == "arm64" && !vars.UseVM && os.Getenv("SONIC_NO_EFACE_FAST") == ""
+
+// compileEfaceFast emits the inline type-dispatch chain for boxed values,
+// followed by the generic OP_eface as fallback. Each chain instruction carries
+// its type in `p` and, in `u`, the IR PC right after the fallback: a matched
+// case jumps there once the value is encoded, never re-entering the chain.
+func (self *Compiler) compileEfaceFast(p *ir.Program, sp int, vt reflect.Type) {
+	start := p.PC()
+	for _, f := range efaceFastTypes {
+		p.Rtt(ir.OP_eface_fast, f.t)
+	}
+	p.Add(ir.OP_eface)
+	end := p.PC()
+	for i := range efaceFastTypes {
+		p.SetVi(start+i, end)
+	}
 }
 
 func (self *Compiler) compileUnsupportedType(p *ir.Program, vt reflect.Type) {
