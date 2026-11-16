@@ -394,6 +394,30 @@ Sonic **不**确保支持所有环境，由于开发高性能代码的困难。�
 
 ## 注意事项
 
+### ARM64 SVE 加速
+
+在 ARM64 平台上，Sonic 会像 amd64 自动选择 AVX2/SSE 一样自动选择原生 SIMD 实现：
+
+- 鲲鹏 CPU（CPU part `0xd02`/`0xd06`）且实际生效的 SVE 向量长度为 32 字节时，默认启用 SVE（wrapgoc）实现；
+- 其他情况回退到 NEON 实现。
+
+可通过以下环境变量覆盖（进程启动时读取一次）：
+
+| 环境变量 | 取值 | 效果 |
+|---|---|---|
+| `SONIC_USE_SVE_WRAPGOC` | `1` / `0` | 优先使用 SVE wrapgoc 实现 / 关闭 SVE，使用 NEON |
+| `SONIC_USE_SVE_LINKNAME` | `1` / `0` | 优先使用 SVE linkname 实现 / 关闭 SVE，使用 NEON |
+
+取值仅在 CPU 与向量长度检查通过后生效，否则回退 NEON。优先级为：`WRAPGOC=1` > `LINKNAME=1` > 任一变量为 `0`（NEON）> 未设置时自动选择；因此 `WRAPGOC=0` 与 `LINKNAME=1` 同时设置时仍会选择 linkname。
+
+例如，与 NEON 基线进行对照：
+
+```bash
+SONIC_USE_SVE_WRAPGOC=0 go test ./...
+```
+
+注意：仓库中的 SVE 汇编按 32 字节向量长度生成，仅当包初始化时通过 `prctl(PR_SVE_GET_VL)` 读取到的实际向量长度为 32 字节时才启用 SVE，否则回退 NEON。该检查只在初始化时执行一次：应用需保证此后所有可能执行 Sonic 的线程保持统一的 32 字节 VL，且不要在初始化后通过 `prctl(PR_SVE_SET_VL)` 修改（新线程的 VL 继承规则由内核决定；`/proc/sys/abi/sve_default_vector_length` 的系统默认值可能与实际生效值不同）。启用 SVE 还会在初始化时进行可执行内存映射，若运行环境禁止（如 SELinux `execmem`、严格的 seccomp），Sonic 会回退 NEON。上述变量仅控制原生 SIMD 实现；编码器默认使用 ARM64 JIT，设置 `SONIC_ENCODER_USE_VM` 为非空值可回退到 VM 编码器。
+
 ### 预热
 
 由于 Sonic 使用 [golang-asm](https://github.com/twitchyliquid64/golang-asm) 作为 JIT 汇编器，这个库并不适用于运行时编译，第一次运行一个大型模式可能会导致请求超时甚至进程内存溢出。为了更好地稳定性，我们建议在运行大型模式或在延迟敏感的应用中，在使用 `Marshal()/Unmarshal()` 前运行 `PretouchMany()`。

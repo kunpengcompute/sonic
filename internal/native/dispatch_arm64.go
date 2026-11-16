@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"os"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	neon "github.com/bytedance/sonic/internal/native/neon"
@@ -375,6 +376,23 @@ func useSveLinkname() {
 	S_parse_with_padding = sve_linkname.S_parse_with_padding
 }
 
+// useSveWrapgocSafe installs the SVE wrappers, falling back to NEON when the
+// loader cannot map executable memory (e.g. hardened execmem policies). Other
+// panics come from the loader itself and are propagated.
+func useSveWrapgocSafe() (ok bool) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if _, isErrno := r.(syscall.Errno); !isErrno {
+			panic(r)
+		}
+	}()
+	useSveWrapgoc()
+	return true
+}
+
 func useSveWrapgoc() {
 	sve_wrapgoc.Use()
 	__GetByPath = sve_wrapgoc.F_get_by_path
@@ -438,16 +456,31 @@ func CpuDetect() bool {
 	return false
 }
 
+// sveVLCompatible reports whether the effective SVE vector length of the
+// calling thread matches the length the checked-in assembly was built for.
+// It runs once during package init and cannot be re-checked per call, so every
+// thread that may execute Sonic must keep VL 32 and must not change it after
+// init (e.g. via prctl(PR_SVE_SET_VL)). The system default in
+// /proc/sys/abi/sve_default_vector_length is not consulted: a thread's
+// effective length may differ from it.
+func sveVLCompatible() bool {
+	vl, ok := sveCurrentVL()
+	return ok && sveVLMatches(vl)
+}
+
 func init() {
-	if CpuDetect() {
-		UseSveWrapgoc = os.Getenv("SONIC_USE_SVE_WRAPGOC") == "1"
-		UseSveLinkname = os.Getenv("SONIC_USE_SVE_LINKNAME") == "1"
-	}
-	if UseSveWrapgoc {
-		useSveWrapgoc()
-	} else if UseSveLinkname {
+	switch selectSveMode(CpuDetect() && sveVLCompatible(),
+		os.Getenv("SONIC_USE_SVE_WRAPGOC"), os.Getenv("SONIC_USE_SVE_LINKNAME")) {
+	case sveModeWrapgoc:
+		if useSveWrapgocSafe() {
+			UseSveWrapgoc = true
+		} else {
+			useNeon()
+		}
+	case sveModeLinkname:
+		UseSveLinkname = true
 		useSveLinkname()
-	} else {
+	default:
 		useNeon()
 	}
 }
