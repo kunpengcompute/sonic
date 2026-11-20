@@ -409,9 +409,9 @@ static always_inline uint64_t get_nonspace_bits(const uint8_t* s) {
     svuint8_t lo = svld1_u8(svptrue_b8(), s);
     svuint8_t hi = svld1_u8(svptrue_b8(), s+32);
 
-    svuint8_t idx_lo = svand_n_u8_z(svptrue_b8(), lo, 0x1F);
+    svuint8_t idx_lo = svand_n_u8_x(pg, lo, 0x1F);
     svuint8_t shuffle_lo = svtbl_u8(space_tab, idx_lo);
-    svuint8_t idx_hi = svand_n_u8_z(svptrue_b8(), hi, 0x1F);
+    svuint8_t idx_hi = svand_n_u8_x(pg, hi, 0x1F);
     svuint8_t shuffle_hi = svtbl_u8(space_tab, idx_hi);
 
     svbool_t lo_res = svcmpeq_u8(svptrue_b8(), lo, shuffle_lo);
@@ -443,9 +443,9 @@ static always_inline uint64_t get_nonspace_bits(const uint8_t* s) {
 }
 
 static always_inline char skip_space_impl(nonspace_block* slf, reader* rdr) {
-    // fast path 1: check at most two spaces for compat JSON or 
+    // fast path 1: check at most four spaces for compat JSON or 
     // some cases in pretty JSON(such as ` "name": "balabala" `)
-    repeat_2(
+    repeat_4(
         char c = rdr->next(rdr->ctx);
         if (likely(!is_space(c))) {
             return c;
@@ -508,29 +508,30 @@ static always_inline string_block string_block_new(uint8_t* s, uint64_t opts) {
     v256u v = v256_loadu((uint8_t*)s);
     if (unlikely((opts & F_VALIDATE_STRING) != 0)) {
         return (string_block){
-            .bs = mask256_tobitmask(v256_eq(v, v256_splat('\\'))),
-            .quote = mask256_tobitmask(v256_eq(v, v256_splat('"'))),
-            .esc = mask256_tobitmask(v256_le(v, v256_splat('\x1f')))
+            .bs = mask256_first(v256_eq(v, v256_splat('\\'))),
+            .quote = mask256_first(v256_eq(v, v256_splat('"'))),
+            .esc = mask256_first(v256_le(v, v256_splat('\x1f')))
         };
     } else {
         return (string_block){
-            .bs = mask256_tobitmask(v256_eq(v, v256_splat('\\'))),
-            .quote = mask256_tobitmask(v256_eq(v, v256_splat('"'))),
-            .esc = 0
+            .bs = mask256_first(v256_eq(v, v256_splat('\\'))),
+            .quote = mask256_first(v256_eq(v, v256_splat('"'))),
+            .esc = 32
         };
     }
 }
 
 static always_inline bool has_quote_first(string_block* block) {
-    return at_first(block->quote, block->bs | block->esc);
+    uint32_t first = block->bs < block->esc ? block->bs : block->esc;
+    return block->quote < first;
 }
 
 static always_inline bool has_backslash(string_block* block) {
-    return  at_first(block->bs, block->quote);
+    return  block->bs < block->quote;
 }
 
 static always_inline bool has_unescaped(string_block* block) {
-    return  at_first(block->esc, block->quote);
+    return  block->esc < block->quote;
 }
 
 static const uint8_t ESCAPED_TAB[256] = {
@@ -625,9 +626,11 @@ static always_inline long parse_string_inplace(uint8_t** cur, bool* has_esc, uin
 
     // breakpoint();
     while (true) {
+	__builtin_prefetch(*cur+64,0,0);
+	__builtin_prefetch(*cur+128,0,0);
         block = string_block_new(*cur, opts);
         if (has_quote_first(&block)) {
-            *cur += trailing_zeros(block.quote) + 1; // skip the quote char
+            *cur += block.quote + 1; // skip the quote char
             *has_esc = false;
             return *cur - start - 1;
         }
@@ -637,7 +640,7 @@ static always_inline long parse_string_inplace(uint8_t** cur, bool* has_esc, uin
         }
 
         if (unlikely((opts & F_VALIDATE_STRING) != 0 && has_unescaped(&block))) {
-            *cur += trailing_zeros(block.esc);
+            *cur += block.esc;
             return -SONIC_CONTROL_CHAR;
         }
 
@@ -646,7 +649,7 @@ static always_inline long parse_string_inplace(uint8_t** cur, bool* has_esc, uin
 
     // deal with the escaped string
     *has_esc = true;
-    *cur += trailing_zeros(block.bs);
+    *cur += block.bs;
     uint8_t* dst = *cur;
     uint8_t esc;
 
@@ -691,7 +694,7 @@ find_and_move:
     }
 
     if (unlikely((opts & F_VALIDATE_STRING) != 0 && has_unescaped(&block))) {
-        *cur += trailing_zeros(block.esc);
+        *cur += block.esc;
         return -SONIC_CONTROL_CHAR;
     }
 
