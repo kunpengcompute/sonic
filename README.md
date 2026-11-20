@@ -394,6 +394,30 @@ Sonic **DOES NOT** ensure to support all environments, due to the difficulty of 
 
 ## Tips
 
+### ARM64 SVE acceleration
+
+On ARM64, Sonic selects the native SIMD implementation automatically, similar to the AVX2/SSE selection on amd64:
+
+- On Kunpeng CPUs (CPU part `0xd02`/`0xd06`) whose effective SVE vector length is 32 bytes, the SVE (wrapgoc) implementation is used by default.
+- Otherwise, the NEON implementation is used.
+
+The selection can be overridden with environment variables, which are read once at startup:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `SONIC_USE_SVE_WRAPGOC` | `1` / `0` | Prefer the SVE wrapgoc implementation / disable SVE and use NEON |
+| `SONIC_USE_SVE_LINKNAME` | `1` / `0` | Prefer the SVE linkname implementation / disable SVE and use NEON |
+
+The values only take effect after the CPU and vector-length checks pass; otherwise Sonic falls back to NEON. The precedence is `WRAPGOC=1` > `LINKNAME=1` > either variable set to `0` (NEON) > automatic selection when unset, so `WRAPGOC=0` combined with `LINKNAME=1` still selects linkname.
+
+For example, to compare against the NEON baseline:
+
+```bash
+SONIC_USE_SVE_WRAPGOC=0 go test ./...
+```
+
+Note: the checked-in SVE assembly is generated for a 32-byte SVE vector length, so SVE is only enabled when the effective vector length read via `prctl(PR_SVE_GET_VL)` during package init is 32 bytes; otherwise Sonic falls back to NEON. This check runs only once: applications must keep every thread that may execute Sonic at a uniform 32-byte VL, and must not change it with `prctl(PR_SVE_SET_VL)` after initialization (new threads inherit the creating thread's VL as determined by the kernel; the system default in `/proc/sys/abi/sve_default_vector_length` may differ from the effective value). Enabling SVE also maps executable memory during initialization; if the environment forbids it (e.g. SELinux `execmem` or strict seccomp), Sonic falls back to NEON. These variables only control the native SIMD path; the encoder uses the ARM64 JIT by default, and setting `SONIC_ENCODER_USE_VM` to any non-empty value falls back to the VM encoder.
+
 ### Pretouch
 
 Since Sonic uses [golang-asm](https://github.com/twitchyliquid64/golang-asm) as a JIT assembler, which is NOT very suitable for runtime compiling, first-hit running of a huge schema may cause request-timeout or even process-OOM. For better stability, we advise **using `PretouchMany()` for huge-schema or lantency-sensitive applications** before `Marshal()/Unmarshal()`.
